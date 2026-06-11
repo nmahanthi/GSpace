@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+    #Requires -Version 5.1
 <#
 .SYNOPSIS
     Google Workspace - Connected Apps & Integration Usage Report (GAM / GAMADV-XTD3 / GAM7)
@@ -17,6 +17,12 @@
 
 .PARAMETER GamPath
     Full path to gam.exe / gam binary. Auto-detected if omitted.
+
+.PARAMETER InputCsv
+    Path to a CSV file listing the users to scan (one user per row).
+    The script auto-detects the email column from these names (first match wins):
+        primaryEmail, PrimaryEmail, email, Email, userEmail, UserEmail, user, User
+    If omitted, the script scans every user in the domain.
 
 .PARAMETER OutputDir
     Where to save all output files. Defaults to .\ConnectedAppsReport_<timestamp>
@@ -49,12 +55,16 @@
 
     # Test mode - first 30 users only
     .\Get-ConnectedAppsReport.ps1 -MaxUsers 30
+
+    # Scan only the users listed in a CSV file (column: primaryEmail / email / userEmail / ...)
+    .\Get-ConnectedAppsReport.ps1 -InputCsv ".\users_to_scan.csv"
 #>
 
 [CmdletBinding()]
 param(
     [string]$GamPath = "",
     [string]$OutputDir = "",
+    [string]$InputCsv = "",
     [switch]$IncludeLastActivity,
     [switch]$IncludeChatSpaces,
     [int]   $MaxUsers = 0,
@@ -183,12 +193,67 @@ $T0 = Get-Date
 Write-Banner "1. Domain Users"
 
 $usersFile = Join-Path $OutputDir "users.csv"
-Write-Step "gam print users fields primaryEmail,name,lastLoginTime,suspended,orgUnitPath"
 
-& $script:GAM print users fields "primaryEmail,name,lastLoginTime,suspended,orgUnitPath" 2>$null |
-Out-File $usersFile -Encoding UTF8
+if ($InputCsv) {
+    if (-not (Test-Path $InputCsv)) {
+        Write-Fail "InputCsv not found: $InputCsv"
+        exit 1
+    }
+    Write-Step "Reading user list from: $InputCsv"
+    $inputRows = @(Import-Csv $InputCsv)
+    if ($inputRows.Count -eq 0) {
+        Write-Fail "InputCsv is empty: $InputCsv"
+        exit 1
+    }
 
-$allUsers = SafeCsv $usersFile
+    # Detect the email column - try common header names first, then any column whose value looks like an email
+    $emailCol = $null
+    foreach ($cn in @('primaryEmail', 'PrimaryEmail', 'email', 'Email', 'userEmail', 'UserEmail', 'user', 'User')) {
+        if ($inputRows[0].PSObject.Properties[$cn]) { $emailCol = $cn; break }
+    }
+    if (-not $emailCol) {
+        foreach ($p in $inputRows[0].PSObject.Properties.Name) {
+            if ("$($inputRows[0].$p)" -match "@") { $emailCol = $p; break }
+        }
+    }
+    if (-not $emailCol) {
+        Write-Fail "No email column detected in $InputCsv. Add a 'primaryEmail' column."
+        exit 1
+    }
+
+    $emails = @($inputRows | ForEach-Object { "$($_.$emailCol)".Trim() } |
+        Where-Object { $_ -match "@" } | Select-Object -Unique)
+    if ($emails.Count -eq 0) {
+        Write-Fail "No valid email addresses found in column '$emailCol' of $InputCsv."
+        exit 1
+    }
+    Write-OK "Loaded $($emails.Count) user(s) from $InputCsv (column: $emailCol)"
+
+    # Write a select-file (one email per line) and ask GAM to print only those users
+    $selectFile = Join-Path $OutputDir "input_users.txt"
+    $emails | Out-File $selectFile -Encoding ASCII
+
+    Write-Step "gam print users select file <input> fields primaryEmail,name,lastLoginTime,suspended,orgUnitPath"
+    & $script:GAM print users select file $selectFile fields "primaryEmail,name,lastLoginTime,suspended,orgUnitPath" 2>$null |
+    Out-File $usersFile -Encoding UTF8
+
+    $allUsers = SafeCsv $usersFile
+    if ($allUsers.Count -eq 0) {
+        Write-Warn "'gam print users select file' returned nothing - falling back to a minimal users.csv built from the input emails."
+        $fallback = $emails | ForEach-Object {
+            [PSCustomObject]@{ primaryEmail = $_; name = ""; lastLoginTime = ""; suspended = "False"; orgUnitPath = "" }
+        }
+        $fallback | Export-Csv $usersFile -NoTypeInformation -Force
+        $allUsers = SafeCsv $usersFile
+    }
+}
+else {
+    Write-Step "gam print users fields primaryEmail,name,lastLoginTime,suspended,orgUnitPath"
+    & $script:GAM print users fields "primaryEmail,name,lastLoginTime,suspended,orgUnitPath" 2>$null |
+    Out-File $usersFile -Encoding UTF8
+    $allUsers = SafeCsv $usersFile
+}
+
 if ($allUsers.Count -eq 0) {
     Write-Fail "Could not retrieve users. Verify GAM authorisation: gam oauth info"
     exit 1
