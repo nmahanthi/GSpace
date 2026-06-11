@@ -1,0 +1,24 @@
+[2026-05-13 17:40:38][INFO] STEP 1: Nav URL fix ...
+[2026-05-13 17:40:50][INFO] Nav fix result: FIXED(1)
+[2026-05-13 17:40:50][INFO] Re-connecting for Steps 2 & 3 ...
+[2026-05-13 17:41:00][SUCCESS] Connected.
+[2026-05-13 17:41:00][INFO] STEP 2: Cascading nav fix ...
+[2026-05-13 17:41:01][INFO] Cascading result: ALREADY_CASCADING
+[2026-05-13 17:41:01][INFO] STEP 3: Page formatting fix ...
+[2026-05-13 17:41:03][INFO] Found 15 pages.
+[2026-05-13 17:41:07][INFO] Page home1.aspx : NO_TEXT_PARTS
+[2026-05-13 17:41:08][INFO] Page Home.aspx : DRYRUN(1)
+[2026-05-13 17:41:10][INFO] Page Text Formatting.aspx : OK
+[2026-05-13 17:41:11][INFO] Page Resources.aspx : OK
+[2026-05-13 17:41:12][INFO] Page File Cabinet.aspx : OK
+[2026-05-13 17:41:13][INFO] Page Announcements.aspx : OK
+[2026-05-13 17:41:14][INFO] Page HR Policies.aspx : OK
+[2026-05-13 17:41:15][INFO] Page Onboarding.aspx : OK
+[2026-05-13 17:41:16][INFO] Page IT Help.aspx : OK
+[2026-05-13 17:41:17][INFO] Page IT Runbooks.aspx : OK
+[2026-05-13 17:41:18][INFO] Page Projects.aspx : OK
+[2026-05-13 17:41:19][INFO] Page Team Wiki.aspx : OK
+[2026-05-13 17:41:21][INFO] Page Engineering.aspx : OK
+[2026-05-13 17:41:22][INFO] Page Backend Guild.aspx : OK
+[2026-05-13 17:41:23][INFO] Page API Standards.aspx : OK
+[2026-05-13 17:41:23][INFO] Disconnected. Done.

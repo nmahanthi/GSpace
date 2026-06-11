@@ -1,0 +1,5 @@
+SiteName,GoogleSitesBaseUrl,SPOSiteUrl,RebuildNavigation
+FTC Migration Test Site,https://sites.google.com/censftmigsme.microsoft-int.com/ftcmigrationtestsite,https://mngenvmcap908272.sharepoint.com/sites/ftcmigrationtestsite,FALSE
+HR Portal,https://sites.google.com/censftmigsme.microsoft-int.com/hrportal,https://mngenvmcap908272.sharepoint.com/sites/hrportal,FALSE
+IT Help Desk,https://sites.google.com/censftmigsme.microsoft-int.com/ithelpdesk,https://mngenvmcap908272.sharepoint.com/sites/ithelpdesk,FALSE
+Finance,https://sites.google.com/censftmigsme.microsoft-int.com/finance,https://mngenvmcap908272.sharepoint.com/sites/finance,FALSE
