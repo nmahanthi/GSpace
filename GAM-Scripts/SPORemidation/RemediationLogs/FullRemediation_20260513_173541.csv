@@ -1,0 +1,5 @@
+"SiteName","SiteSlug","NavFix","CascadingFix","PagesFixed","PagesScanned","PagesFailed","Error","LogFile"
+"FTC Migration Test Site","ftcmigrationtestsite","ERROR","ALREADY_CASCADING","0","15","2","","C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\SPORemidation\RemediationLogs\ftcmigrationtestsite_20260513_173541.log"
+"HR Portal","hrportal","ERROR","ERROR","0","0","0","","C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\SPORemidation\RemediationLogs\hrportal_20260513_173541.log"
+"IT Help Desk","ithelpdesk","ERROR","ERROR","0","0","0","","C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\SPORemidation\RemediationLogs\ithelpdesk_20260513_173541.log"
+"Finance","finance","ERROR","ERROR","0","0","0","","C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\SPORemidation\RemediationLogs\finance_20260513_173541.log"

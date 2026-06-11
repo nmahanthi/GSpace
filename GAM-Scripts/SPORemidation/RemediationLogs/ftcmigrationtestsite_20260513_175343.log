@@ -1,0 +1,24 @@
+[2026-05-13 17:54:06][INFO] Connecting to https://mngenvmcap908272.sharepoint.com/sites/ftcmigrationtestsite ...
+[2026-05-13 17:54:13][SUCCESS] Connected.
+[2026-05-13 17:54:13][INFO] STEP 1: Nav URL fix ...
+[2026-05-13 17:54:15][INFO] Nav fix result: FIXED(1)
+[2026-05-13 17:54:15][INFO] STEP 2: Cascading nav fix ...
+[2026-05-13 17:54:16][INFO] Cascading result: ALREADY_CASCADING
+[2026-05-13 17:54:16][INFO] STEP 3: Page formatting fix ...
+[2026-05-13 17:54:18][INFO] Found 15 pages.
+[2026-05-13 17:54:21][INFO] Page home1.aspx : NO_TEXT_PARTS
+[2026-05-13 17:54:22][INFO] Page Home.aspx : DRYRUN(1)
+[2026-05-13 17:54:23][INFO] Page Text Formatting.aspx : OK
+[2026-05-13 17:54:25][INFO] Page Resources.aspx : OK
+[2026-05-13 17:54:26][INFO] Page File Cabinet.aspx : OK
+[2026-05-13 17:54:27][INFO] Page Announcements.aspx : OK
+[2026-05-13 17:54:28][INFO] Page HR Policies.aspx : OK
+[2026-05-13 17:54:29][INFO] Page Onboarding.aspx : OK
+[2026-05-13 17:54:30][INFO] Page IT Help.aspx : OK
+[2026-05-13 17:54:31][INFO] Page IT Runbooks.aspx : OK
+[2026-05-13 17:54:32][INFO] Page Projects.aspx : OK
+[2026-05-13 17:54:33][INFO] Page Team Wiki.aspx : OK
+[2026-05-13 17:54:34][INFO] Page Engineering.aspx : OK
+[2026-05-13 17:54:35][INFO] Page Backend Guild.aspx : OK
+[2026-05-13 17:54:36][INFO] Page API Standards.aspx : OK
+[2026-05-13 17:54:36][INFO] Disconnected. Done.

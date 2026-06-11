@@ -1,0 +1,17 @@
+{
+  "name": "gsites_nonprod_assessment",
+  "version": "1.0.0",
+  "description": "Non-prod Google Sites Assessment Pack",
+  "main": "02_save_playwright_auth.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "csv-parse": "^6.2.1",
+    "csv-stringify": "^6.7.0",
+    "playwright": "^1.60.0"
+  }
+}

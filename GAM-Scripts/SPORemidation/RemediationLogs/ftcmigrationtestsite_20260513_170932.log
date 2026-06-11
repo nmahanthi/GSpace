@@ -1,0 +1,24 @@
+[2026-05-13 17:09:32][INFO] STEP 1: Nav URL fix ...
+[2026-05-13 17:17:28][ERROR] Nav fix failed: The variable '$script:fixCount' cannot be retrieved because it has not been set.
+[2026-05-13 17:17:28][INFO] Re-connecting for Steps 2 & 3 ...
+[2026-05-13 17:17:34][SUCCESS] Connected.
+[2026-05-13 17:17:34][INFO] STEP 2: Cascading nav fix ...
+[2026-05-13 17:17:35][INFO] Cascading result: ALREADY_CASCADING
+[2026-05-13 17:17:35][INFO] STEP 3: Page formatting fix ...
+[2026-05-13 17:17:37][INFO] Found 15 pages.
+[2026-05-13 17:17:42][INFO] Page home1.aspx : NO_TEXT_PARTS
+[2026-05-13 17:17:42][INFO] Page Home.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Text Formatting.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Resources.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page File Cabinet.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Announcements.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page HR Policies.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Onboarding.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page IT Help.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page IT Runbooks.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Projects.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:42][INFO] Page Team Wiki.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:43][INFO] Page Engineering.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:43][INFO] Page Backend Guild.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:43][INFO] Page API Standards.aspx : PAGE_NOT_FOUND
+[2026-05-13 17:17:43][INFO] Disconnected. Done.
