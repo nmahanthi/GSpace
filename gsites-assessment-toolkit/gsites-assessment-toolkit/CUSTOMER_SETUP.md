@@ -112,6 +112,22 @@ This is used to distinguish internal users from external users in permission ana
 
 **Run for a selected subset of sites (useful for large tenants):**
 
+The CSV can contain either **site names** or **Google Sites URLs**. If you provide URLs, the site name is automatically extracted from the URL path.
+
+Example CSV by name:
+```csv
+SiteName
+My First Site
+Another Site
+```
+
+Example CSV by URL:
+```csv
+SiteUrl
+https://sites.google.com/yourcompany.com/my-first-site
+https://sites.google.com/yourcompany.com/another-site
+```
+
 ```powershell
 # FRESH RUN (first time on this machine / folder):
 # The script will run GAM export to build the inventory, then filter it.

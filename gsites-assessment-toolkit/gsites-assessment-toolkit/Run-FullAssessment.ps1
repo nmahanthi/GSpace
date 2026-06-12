@@ -72,15 +72,21 @@
     .\Run-FullAssessment.ps1 -PrimaryDomain "rocheua.com" -SkipGAMExport -SkipBrowserAuth -UseApiExtract -AccessToken "ya29...."
 
 .PARAMETER SelectedSitesCsv
-    Path to a CSV file containing a list of specific site names to process.
+    Path to a CSV file containing a list of specific site names or URLs to process.
     Only these sites will be crawled, enriched, and scored. Useful for large
     tenants where processing all sites is not feasible. The CSV must contain
-    a column named SiteName, name, or Name.
+    a column named SiteName, name, Name, SiteUrl, url, URL, or SiteURL.
+    If you provide Google Sites URLs, the site name will be extracted from the URL path.
 
-    Example CSV:
+    Example CSV (by name):
         SiteName
         My First Site
         Another Site
+
+    Example CSV (by URL):
+        SiteUrl
+        https://sites.google.com/yourdomain.com/my-first-site
+        https://sites.google.com/yourdomain.com/another-site
 
 .PARAMETER InventoryCsv
     Path to an existing GSites_Inventory_Detailed.csv file. Use this when you
@@ -187,11 +193,17 @@ function Filter-InventoryBySelectedSites {
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.name }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.Name }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SITENAME }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SiteUrl }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.url }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.URL }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SiteURL }
+
+        $name = Extract-SiteNameFromValue -Value $name
         if (-not [string]::IsNullOrWhiteSpace($name)) { $selectedNames.Add([string]$name.Trim()) | Out-Null }
     }
 
     if ($selectedNames.Count -eq 0) {
-        throw "No site names found in $SelectedSitesCsvPath. Expected column: SiteName, name, or Name"
+        throw "No site names found in $SelectedSitesCsvPath. Expected column: SiteName, name, Name, SITENAME, SiteUrl, url, URL, or SiteURL."
     }
 
     Write-Info "Filtering inventory to $($selectedNames.Count) selected site name(s)..."
@@ -202,11 +214,17 @@ function Filter-InventoryBySelectedSites {
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.SiteName }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.Name }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $_.SITENAME }
-        $selectedNames.Contains([string]$name)
+
+        $urlName = $null
+        if (-not [string]::IsNullOrWhiteSpace($_.webviewlink)) {
+            $urlName = Extract-SiteNameFromValue -Value $_.webviewlink
+        }
+
+        $selectedNames.Contains([string]$name) -or $selectedNames.Contains([string]$urlName)
     }
 
     if ($filtered.Count -eq 0) {
-        throw "None of the selected site names were found in the inventory. Check the names in $SelectedSitesCsvPath"
+        throw "None of the selected site names were found in the inventory. Check the names in $SelectedSitesCsvPath. If you provided URLs, make sure the site name in the URL matches the Drive file name."
     }
 
     # Backup original inventory if not already backed up
@@ -246,6 +264,23 @@ function Filter-InventoryBySelectedSites {
     }
 }
 
+function Extract-SiteNameFromValue {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+
+    $Value = $Value.Trim()
+
+    # If it looks like a Google Sites URL, extract the site name (path segment) from it
+    # Format: https://sites.google.com/<domain>/<site-name>[/<page-path>]
+    # Also supports old Apps format: https://sites.google.com/a/<domain>/<site-name>
+    if ($Value -match '^https?://sites\.google\.com/(?:a/)?[^/]+/([^/]+)') {
+        return $Matches[1]
+    }
+
+    return $Value
+}
+
 function Build-GamNameFilter {
     param([Parameter(Mandatory = $true)][string]$SelectedSitesCsvPath)
 
@@ -260,11 +295,17 @@ function Build-GamNameFilter {
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.name }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.Name }
         if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SITENAME }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SiteUrl }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.url }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.URL }
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = $row.SiteURL }
+
+        $name = Extract-SiteNameFromValue -Value $name
         if (-not [string]::IsNullOrWhiteSpace($name)) { $names.Add([string]$name.Trim()) | Out-Null }
     }
 
     if ($names.Count -eq 0) {
-        Write-Info "No site names found in $SelectedSitesCsvPath. Check the column header (expected SiteName, name, Name, or SITENAME)."
+        Write-Info "No site names found in $SelectedSitesCsvPath. Check the column header (expected SiteName, name, Name, SITENAME, SiteUrl, url, URL, or SiteURL)."
         return $null
     }
 
@@ -394,6 +435,18 @@ if (-not $SkipGAMExport) {
         Write-Error-Custom "GAM export failed with exit code $($gamResult.ExitCode)"
         Write-LogTail -Path $gamResult.StdErrLog -Label 'GAM stderr tail (last 20 lines)' -Color Red
         Write-LogTail -Path $gamResult.StdOutLog -Label 'GAM stdout tail (last 20 lines)' -Color Gray
+        if ($SelectedSitesCsv -and $gamFilter) {
+            throw @"
+GAM export failed. This may be because the selected site names do not match the Drive file names.
+The filter used was: $gamFilter
+
+If your CSV contains Google Sites URLs, the script extracts the site name from the URL path.
+For example: https://sites.google.com/domain.com/site-name -> site-name
+
+If the extracted names do not match the actual Drive file names, provide the exact Drive file names
+(the site titles) in your CSV instead of URLs.
+"@
+        }
         throw 'GAM export failed'
     }
 
