@@ -44,7 +44,7 @@
 .PARAMETER UseApiExtract
     Use the Sites API v1 (03b_api_extract_embeds.js) instead of the Playwright
     browser crawler (03_crawl_sites.js) to identify embedded content.
-    Much faster — minutes vs hours. Requires a valid -AccessToken or GCP_ACCESS_TOKEN.
+    Much faster - minutes vs hours. Requires a valid -AccessToken or GCP_ACCESS_TOKEN.
     Does not need a browser, Playwright, or a saved auth session.
 
 .PARAMETER AccessToken
@@ -421,7 +421,7 @@ if (-not $SkipCrawl) {
 
                     if ($null -ne $completed) {
                         # Out-String + Trim() removes all \r\n that gcloud appends to its output.
-                        # Without this the Bearer header becomes "Bearer ya29.xxx\r\n" → HTTP 401.
+                        # Without this the Bearer header becomes "Bearer ya29.xxx\r\n" -> HTTP 401.
                         $sitesApiToken = (Receive-Job -Job $job | Out-String).Trim()
                         Remove-Job -Job $job -Force
 
@@ -430,10 +430,10 @@ if (-not $SkipCrawl) {
                             $tokenAvailable = $true
                         }
                         elseif ($sitesApiToken -match 'ERROR') {
-                            Write-Info "gcloud auth not configured or expired — run: gcloud auth login"
+                            Write-Info "gcloud auth not configured or expired - run: gcloud auth login"
                         }
                         else {
-                            Write-Info "Unexpected gcloud output — could not extract token"
+                            Write-Info "Unexpected gcloud output - could not extract token"
                         }
                     }
                     else {
@@ -521,10 +521,10 @@ if (-not $SkipCrawl) {
         $effectiveOffset = [Math]::Min($SiteOffset, $siteCount)
         $remaining = $siteCount - $effectiveOffset
         $effectiveCount = if ($MaxSites -gt 0) { [Math]::Min($MaxSites, $remaining) } else { $remaining }
-        Write-Info "Sites that will be processed this run: $effectiveCount (sites $($effectiveOffset + 1) – $($effectiveOffset + $effectiveCount) of $siteCount)"
+        Write-Info "Sites that will be processed this run: $effectiveCount (sites $($effectiveOffset + 1) - $($effectiveOffset + $effectiveCount) of $siteCount)"
 
         if ($UseApiExtract) {
-            # ── Fast path: Sites API v1 — no browser required ────────────────
+            # -- Fast path: Sites API v1 - no browser required ----------------
             Write-Info "Mode: Sites API v1 extractor (03b_api_extract_embeds.js)"
 
             if ([string]::IsNullOrWhiteSpace($AccessToken)) {
@@ -548,7 +548,7 @@ if (-not $SkipCrawl) {
             Write-Success "API embed extraction completed"
         }
         else {
-            # ── Standard path: Playwright browser crawler ─────────────────────
+            # -- Standard path: Playwright browser crawler ---------------------
             Write-Info "Mode: Playwright browser crawler (03_crawl_sites.js)"
             Write-Info "Starting crawl (this may take a while)..."
 
@@ -609,7 +609,7 @@ if (-not $SkipEnrichment) {
                 $completed = Wait-Job -Job $job -Timeout 5
 
                 if ($null -ne $completed) {
-                    # Same trim as Step 4A — prevents \r\n corrupting the Bearer header
+                    # Same trim as Step 4A - prevents \r\n corrupting the Bearer header
                     $AccessToken = (Receive-Job -Job $job | Out-String).Trim()
                     Remove-Job -Job $job -Force
 
@@ -618,14 +618,14 @@ if (-not $SkipEnrichment) {
                         $tokenAvailable = $true
                     }
                     elseif ($AccessToken -match 'ERROR') {
-                        Write-Info "gcloud auth not configured or expired — run: gcloud auth login"
+                        Write-Info "gcloud auth not configured or expired - run: gcloud auth login"
                     }
                     else {
-                        Write-Info "Unexpected gcloud output — could not extract token"
+                        Write-Info "Unexpected gcloud output - could not extract token"
                     }
                 }
                 else {
-                    Write-Info "gcloud command timed out (>5 s) — skipping token retrieval"
+                    Write-Info "gcloud command timed out (>5 s) - skipping token retrieval"
                     Remove-Job -Job $job -Force
                 }
             }
@@ -669,7 +669,7 @@ if (-not $SkipEnrichment) {
         $enrichScript = Join-Path $ScriptDir '04_enrich_artifacts.ps1'
         Write-Info "Running artifact enrichment..."
 
-        # Pass token via env var — avoids command-line arg parsing that can mangle long tokens
+        # Pass token via env var - avoids command-line arg parsing that can mangle long tokens
         $env:GCP_ACCESS_TOKEN = $AccessToken
         & pwsh -ExecutionPolicy Bypass -File $enrichScript -OutputDir $OutputDir
 
@@ -744,7 +744,7 @@ Write-Host ""
 
 $allOutputFiles = Get-ChildItem $OutputDir -Filter "*.csv" | Sort-Object Name
 foreach ($file in $allOutputFiles) {
-    # Stream-count lines — fast even for million-row files; Import-Csv was loading all data into memory
+    # Stream-count lines - fast even for million-row files; Import-Csv was loading all data into memory
     $lineCount = 0
     switch -File $file.FullName { default { $lineCount++ } }
     $rowCount = [Math]::Max(0, $lineCount - 1)  # subtract CSV header row

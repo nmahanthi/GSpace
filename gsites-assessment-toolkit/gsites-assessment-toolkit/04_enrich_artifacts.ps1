@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Continue'
 if ([string]::IsNullOrWhiteSpace($AccessToken)) {
     $AccessToken = $env:GCP_ACCESS_TOKEN
 }
-# Trim \r\n that gcloud or PowerShell Receive-Job appends — prevents HTTP 401
+# Trim \r\n that gcloud or PowerShell Receive-Job appends - prevents HTTP 401
 $AccessToken = ($AccessToken ?? '').Trim()
 if ([string]::IsNullOrWhiteSpace($AccessToken)) {
     throw 'Provide -AccessToken or set GCP_ACCESS_TOKEN.'
@@ -24,9 +24,9 @@ if (Test-Path $embedsFile) { $embedRows = Import-Csv $embedsFile }
 $linkedForms = $embedRows | Where-Object { $_.ArtifactType -eq 'Form' } |
 Group-Object ArtifactUrl | ForEach-Object { $_.Group[0] }
 
-# Sheets and Scripts enrichment skipped — the Apps Script and Sheets APIs return 403
+# Sheets and Scripts enrichment skipped - the Apps Script and Sheets APIs return 403
 # for this account. Empty output files are written to keep downstream steps intact.
-Write-Host "  [SKIP] Sheets enrichment (account lacks Sheets API access — 403)"
+Write-Host "  [SKIP] Sheets enrichment (account lacks Sheets API access - 403)"
 @() | Export-Csv -NoTypeInformation -Path (Join-Path $OutputDir 'Sheets_Enrichment.csv')
 
 Write-Host "  Enriching $(@($linkedForms).Count) forms (parallel, throttle=$ThrottleLimit)..."
@@ -75,7 +75,7 @@ if ($formBag.Count -gt 0) { $formBag | Export-Csv -NoTypeInformation -Path (Join
 else { @() | Export-Csv -NoTypeInformation -Path (Join-Path $OutputDir 'Forms_Enrichment.csv') }
 Write-Host "  Forms done: $($formBag.Count) enriched"
 
-Write-Host "  [SKIP] Scripts enrichment (account lacks Apps Script API access — 403)"
+Write-Host "  [SKIP] Scripts enrichment (account lacks Apps Script API access - 403)"
 @() | Export-Csv -NoTypeInformation -Path (Join-Path $OutputDir 'Scripts_Enrichment.csv')
 
 Write-Host 'Artifact enrichment completed.'
