@@ -81,6 +81,12 @@
         SiteName
         My First Site
         Another Site
+
+.PARAMETER InventoryCsv
+    Path to an existing GSites_Inventory_Detailed.csv file. Use this when you
+    already have the inventory from a previous GAM export and want to skip
+    re-running GAM. The file will be copied into the output/ folder so all
+    downstream scripts can find it.
 #>
 
 param(
@@ -105,7 +111,10 @@ param(
     [string]$AccessToken,
 
     # Filter to a specific list of sites (for large tenants)
-    [string]$SelectedSitesCsv
+    [string]$SelectedSitesCsv,
+
+    # Provide an existing inventory CSV if skipping GAM export
+    [string]$InventoryCsv
 )
 
 Set-StrictMode -Version Latest
@@ -360,8 +369,33 @@ else {
 # Filter inventory to selected sites if a CSV is provided
 if ($SelectedSitesCsv) {
     $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'
+
+    # If an external inventory CSV was provided, copy it to the output folder
+    if ($InventoryCsv -and (Test-Path $InventoryCsv)) {
+        if (-not (Test-Path $OutputDir)) {
+            New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+        }
+        Copy-Item $InventoryCsv $inventoryFile -Force
+        Write-Success "Copied inventory from $InventoryCsv to output folder"
+    }
+
     if (-not (Test-Path $inventoryFile)) {
-        throw "Inventory file not found: $inventoryFile. Cannot apply -SelectedSitesCsv filter."
+        if ($SkipGAMExport) {
+            throw @"
+Inventory file not found: $inventoryFile
+
+You used -SkipGAMExport but the inventory file does not exist yet.
+On a fresh run you must let the script run GAM export to build the inventory.
+
+Options:
+  1. Remove -SkipGAMExport from your command (recommended for fresh runs)
+     Example: .\Run-FullAssessment.ps1 -PrimaryDomain "$PrimaryDomain" -SelectedSitesCsv "$SelectedSitesCsv"
+
+  2. If you already have an inventory file somewhere else, use -InventoryCsv:
+     Example: .\Run-FullAssessment.ps1 -PrimaryDomain "$PrimaryDomain" -SelectedSitesCsv "$SelectedSitesCsv" -InventoryCsv "C:\path\to\GSites_Inventory_Detailed.csv"
+"@
+        }
+        throw "Inventory file not found: $inventoryFile. GAM export may have failed or produced no sites."
     }
     Filter-InventoryBySelectedSites -InventoryPath $inventoryFile -SelectedSitesCsvPath $SelectedSitesCsv
 }

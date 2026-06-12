@@ -111,9 +111,24 @@ This is used to distinguish internal users from external users in permission ana
 ```
 
 **Run for a selected subset of sites (useful for large tenants):**
+
 ```powershell
-# Create a CSV with one column named SiteName containing the site names to process
+# FRESH RUN (first time on this machine / folder):
+# The script will run GAM export to build the inventory, then filter it.
+# Do NOT use -SkipGAMExport on a fresh run.
+.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SelectedSitesCsv "selected_sites.csv"
+```
+
+```powershell
+# REPEAT RUN (inventory already exists in the output/ folder):
+# Skip GAM export and browser auth since they were already done.
 .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SkipGAMExport -SkipBrowserAuth -SelectedSitesCsv "selected_sites.csv"
+```
+
+```powershell
+# REPEAT RUN with inventory stored elsewhere:
+# Point to the existing inventory file with -InventoryCsv.
+.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SkipGAMExport -SkipBrowserAuth -SelectedSitesCsv "selected_sites.csv" -InventoryCsv "C:\path\to\GSites_Inventory_Detailed.csv"
 ```
 
 ---
