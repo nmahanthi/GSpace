@@ -353,58 +353,77 @@ function Resolve-TargetUsers {
         }
     }
 
+    Write-Log "Resolve-TargetUsers: -Users count=$($Users.Count), -UsersFile='$UsersFile'"
+
     foreach ($u in $Users) {
         foreach ($part in ($u -split '[,;\s]+')) { & $addEmail $part }
     }
+    $afterUsersParam = $result.Count
+    Write-Log "Resolve-TargetUsers: after -Users parsing -> $afterUsersParam email(s)"
 
     $fileToUse = $UsersFile
+    $fileSource = if ($UsersFile) { "-UsersFile parameter" } else { "" }
     if (-not $fileToUse -and $Config) {
         foreach ($key in @("UsersFile", "usersFile", "TargetsFile")) {
             $v = $Config.PSObject.Properties[$key]
-            if ($v -and $v.Value) { $fileToUse = [string]$v.Value; break }
+            if ($v -and $v.Value) {
+                $fileToUse = [string]$v.Value
+                $fileSource = "config key '$key'"
+                break
+            }
         }
     }
 
     if ($fileToUse) {
         $resolvedPath = Resolve-AbsolutePath -Path $fileToUse
+        Write-Log "Resolve-TargetUsers: loading file from $fileSource -> $resolvedPath"
+
         if (-not (Test-Path -LiteralPath $resolvedPath)) {
             throw "UsersFile not found: $resolvedPath"
         }
 
         $firstLine = Get-Content -LiteralPath $resolvedPath -TotalCount 1 -Encoding UTF8
         $looksLikeCsv = $firstLine -and ($firstLine -match '(?i)email|user|primary')
+        Write-Log "Resolve-TargetUsers: first line='$firstLine'; detected as $(if ($looksLikeCsv) { 'CSV' } else { 'plain text' })"
 
         if ($looksLikeCsv) {
-            $rows = Import-Csv -LiteralPath $resolvedPath
-            if ($rows -and $rows.Count -gt 0) {
+            $rows = @(Import-Csv -LiteralPath $resolvedPath)
+            if ($rows.Count -gt 0) {
                 $emailCol = Get-FirstExistingPropertyName -Object $rows[0] -CandidateNames @(
                     "primaryEmail", "PrimaryEmail", "email", "Email",
-                    "userEmail", "UserEmail", "user", "User"
+                    "userEmail", "UserEmail", "user", "User", "EmailAddress", "emailAddress"
                 )
                 if (-not $emailCol) {
                     $cols = ($rows[0].PSObject.Properties.Name) -join ", "
                     throw "UsersFile CSV has no email column. Columns found: $cols"
                 }
+                Write-Log "Resolve-TargetUsers: CSV rows=$($rows.Count), email column='$emailCol'"
                 foreach ($row in $rows) { & $addEmail ([string]$row.$emailCol) }
+            }
+            else {
+                Write-Log "Resolve-TargetUsers: CSV has 0 data rows."
             }
         }
         else {
-            Get-Content -LiteralPath $resolvedPath -Encoding UTF8 | ForEach-Object {
-                & $addEmail $_
-            }
+            $lines = @(Get-Content -LiteralPath $resolvedPath -Encoding UTF8)
+            Write-Log "Resolve-TargetUsers: plain-text lines=$($lines.Count)"
+            foreach ($line in $lines) { & $addEmail $line }
         }
+        Write-Log "Resolve-TargetUsers: after file parsing -> $($result.Count) email(s)"
     }
 
     if ($result.Count -eq 0 -and $Config) {
         foreach ($key in @("Users", "users", "TargetUsers")) {
             $v = $Config.PSObject.Properties[$key]
             if ($v -and $v.Value) {
+                Write-Log "Resolve-TargetUsers: loading from config key '$key'"
                 foreach ($e in $v.Value) { & $addEmail ([string]$e) }
                 break
             }
         }
     }
 
+    Write-Log "Resolve-TargetUsers: FINAL unique email count = $($result.Count)"
     return , ($result.ToArray())
 }
 
