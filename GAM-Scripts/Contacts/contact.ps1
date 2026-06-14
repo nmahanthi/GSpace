@@ -2,7 +2,9 @@ param(
     [string]$OutputCsv = ".\ContactDelegates_Final.csv",
     [string]$WorkingFolder = ".\GAM_ContactDelegates_Work",
     [string]$GamExe = "",
-    [string]$ConfigFile = ""
+    [string]$ConfigFile = "",
+    [string[]]$Users = @(),
+    [string]$UsersFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -328,12 +330,117 @@ function Get-DelegateEmailsFromRow {
     return $emails | Sort-Object -Unique
 }
 
+function Resolve-TargetUsers {
+    param(
+        [string[]]$Users,
+        [string]$UsersFile,
+        [object]$Config
+    )
+
+    $result = New-Object System.Collections.Generic.List[string]
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+
+    $emailPattern = "^[A-Za-z0-9._%+\-']+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$"
+
+    $addEmail = {
+        param([string]$Email)
+        if ([string]::IsNullOrWhiteSpace($Email)) { return }
+        $trimmed = $Email.Trim().Trim('"').Trim("'")
+        if ($trimmed -match $emailPattern -and $seen.Add($trimmed)) {
+            $result.Add($trimmed)
+        }
+    }
+
+    foreach ($u in $Users) {
+        foreach ($part in ($u -split '[,;\s]+')) { & $addEmail $part }
+    }
+
+    $fileToUse = $UsersFile
+    if (-not $fileToUse -and $Config) {
+        foreach ($key in @("UsersFile", "usersFile", "TargetsFile")) {
+            $v = $Config.PSObject.Properties[$key]
+            if ($v -and $v.Value) { $fileToUse = [string]$v.Value; break }
+        }
+    }
+
+    if ($fileToUse) {
+        $resolvedPath = Resolve-AbsolutePath -Path $fileToUse
+        if (-not (Test-Path -LiteralPath $resolvedPath)) {
+            throw "UsersFile not found: $resolvedPath"
+        }
+
+        $firstLine = Get-Content -LiteralPath $resolvedPath -TotalCount 1 -Encoding UTF8
+        $looksLikeCsv = $firstLine -and ($firstLine -match '(?i)email|user|primary')
+
+        if ($looksLikeCsv) {
+            $rows = Import-Csv -LiteralPath $resolvedPath
+            if ($rows -and $rows.Count -gt 0) {
+                $emailCol = Get-FirstExistingPropertyName -Object $rows[0] -CandidateNames @(
+                    "primaryEmail", "PrimaryEmail", "email", "Email",
+                    "userEmail", "UserEmail", "user", "User"
+                )
+                if (-not $emailCol) {
+                    $cols = ($rows[0].PSObject.Properties.Name) -join ", "
+                    throw "UsersFile CSV has no email column. Columns found: $cols"
+                }
+                foreach ($row in $rows) { & $addEmail ([string]$row.$emailCol) }
+            }
+        }
+        else {
+            Get-Content -LiteralPath $resolvedPath -Encoding UTF8 | ForEach-Object {
+                & $addEmail $_
+            }
+        }
+    }
+
+    if ($result.Count -eq 0 -and $Config) {
+        foreach ($key in @("Users", "users", "TargetUsers")) {
+            $v = $Config.PSObject.Properties[$key]
+            if ($v -and $v.Value) {
+                foreach ($e in $v.Value) { & $addEmail ([string]$e) }
+                break
+            }
+        }
+    }
+
+    return , ($result.ToArray())
+}
+
+function Get-UserDisplayName {
+    param([string]$Email)
+
+    try {
+        $r = Invoke-Gam -Arguments @("info", "user", $Email, "fields", "fullname")
+        foreach ($line in ($r.StdOut -split "`r?`n")) {
+            if ($line -match '^\s*Full Name:\s*(.+)\s*$') {
+                return $Matches[1].Trim()
+            }
+        }
+    }
+    catch {
+        Write-Log "WARNING: info user failed for ${Email}: $($_.Exception.Message)"
+    }
+    return ""
+}
+
 $script:Config = Get-GamConfig -ConfigFile $ConfigFile
 $script:GamExeResolved = Resolve-GamExe -GamExe $GamExe -Config $script:Config
 Write-Log "Using GAM executable: $script:GamExeResolved"
 
 Write-Log "Validating GAM executable..."
 Invoke-Gam -Arguments @("version") | Out-Null
+
+$targetUsers = Resolve-TargetUsers -Users $Users -UsersFile $UsersFile -Config $script:Config
+$isTargeted = $targetUsers.Count -gt 0
+
+if ($isTargeted) {
+    Write-Log "Targeted mode: $($targetUsers.Count) user(s) selected."
+}
+else {
+    Write-Log "No -Users / -UsersFile provided - scanning ALL users in the tenant."
+}
 
 Confirm-Folder -Path $WorkingFolder
 
@@ -346,17 +453,36 @@ if (Test-Path -LiteralPath $OutputCsv) { Remove-Item -LiteralPath $OutputCsv    
 
 # GAM's contactdelegates output does not include the owner's display name,
 # so we fetch users separately to populate 'User Display name'.
-Write-Log "Exporting users (for display name lookup)..."
-Invoke-Gam -Arguments @(
-    "redirect", "csv", $usersCsv,
-    "print", "users", "name"
-) | Out-Null
+if ($isTargeted) {
+    Write-Log "Looking up display names for $($targetUsers.Count) target user(s)..."
+    $userRows = foreach ($email in $targetUsers) {
+        [PSCustomObject]@{
+            primaryEmail    = $email
+            'name.fullName' = (Get-UserDisplayName -Email $email)
+        }
+    }
+    $userRows | Export-Csv -LiteralPath $usersCsv -NoTypeInformation -Encoding UTF8
 
-Write-Log "Exporting contact delegates (shownames for delegate display name)..."
-Invoke-Gam -Arguments @(
-    "redirect", "csv", $delegatesCsv,
-    "all", "users", "print", "contactdelegates", "shownames"
-) | Out-Null
+    Write-Log "Exporting contact delegates for $($targetUsers.Count) target user(s)..."
+    Invoke-Gam -Arguments @(
+        "redirect", "csv", $delegatesCsv,
+        "users", ($targetUsers -join ','),
+        "print", "contactdelegates", "shownames"
+    ) | Out-Null
+}
+else {
+    Write-Log "Exporting users (for display name lookup)..."
+    Invoke-Gam -Arguments @(
+        "redirect", "csv", $usersCsv,
+        "print", "users", "name"
+    ) | Out-Null
+
+    Write-Log "Exporting contact delegates (shownames for delegate display name)..."
+    Invoke-Gam -Arguments @(
+        "redirect", "csv", $delegatesCsv,
+        "all", "users", "print", "contactdelegates", "shownames"
+    ) | Out-Null
+}
 
 if (-not (Test-Path -LiteralPath $usersCsv)) {
     throw "Users export file was not created: $usersCsv"
