@@ -1,0 +1,57 @@
+﻿{
+    "export_system":  "gam_tool",
+    "source_workload":  "bot\u0026chat app related_usinggam",
+    "export_version":  "1.0",
+    "snapshot_id":  "BOTCHAT_20260615_154743Z",
+    "snapshot_time_utc":  "2026-06-15T15:47:43Z",
+    "run_type":  "assessment",
+    "environment":  "prod",
+    "tenant_name":  "rocheua.com",
+    "exported_by":  "bot\u0026chat app related_usinggam_gam_tool",
+    "delivery_format":  "csv",
+    "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
+    "datasets":  [
+                     {
+                         "dataset_name":  "apps_aggregated",
+                         "file_name":  "apps_aggregated.csv",
+                         "record_count":  12,
+                         "schema_name":  "canonical_apps_aggregated",
+                         "description":  "apps_aggregated dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "chat_spaces_target",
+                         "file_name":  "chat_spaces_target.csv",
+                         "record_count":  117,
+                         "schema_name":  "canonical_chat_spaces_target",
+                         "description":  "chat_spaces_target dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "tokens_per_user",
+                         "file_name":  "tokens_per_user.csv",
+                         "record_count":  6,
+                         "schema_name":  "canonical_tokens_per_user",
+                         "description":  "tokens_per_user dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "tokens_target_users",
+                         "file_name":  "tokens_target_users.csv",
+                         "record_count":  16,
+                         "schema_name":  "canonical_tokens_target_users",
+                         "description":  "tokens_target_users dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "target_users",
+                         "file_name":  "_target_users.csv",
+                         "record_count":  9,
+                         "schema_name":  "canonical_target_users",
+                         "description":  "target_users dataset exported from GAM Tool"
+                     }
+                 ],
+    "ingestion_control":  {
+                              "run_id_pattern":  "RUN_BOTCHAT_20260615_154743Z",
+                              "workload_name":  "bot\u0026chat app related_usinggam",
+                              "snapshot_granularity":  "full",
+                              "is_delta":  false,
+                              "is_validation_extract":  false
+                          }
+}

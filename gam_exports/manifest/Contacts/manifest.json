@@ -1,0 +1,29 @@
+﻿{
+    "export_system":  "gam_tool",
+    "source_workload":  "contacts",
+    "export_version":  "1.0",
+    "snapshot_id":  "CONTACTS_20260614_211857Z",
+    "snapshot_time_utc":  "2026-06-14T21:18:57Z",
+    "run_type":  "assessment",
+    "environment":  "prod",
+    "tenant_name":  "rocheua.com",
+    "exported_by":  "contacts_gam_tool",
+    "delivery_format":  "csv",
+    "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
+    "datasets":  [
+                     {
+                         "dataset_name":  "contactdelegates_final",
+                         "file_name":  "ContactDelegates_Final.csv",
+                         "record_count":  2,
+                         "schema_name":  "canonical_contactdelegates_final",
+                         "description":  "contactdelegates_final dataset exported from GAM Tool"
+                     }
+                 ],
+    "ingestion_control":  {
+                              "run_id_pattern":  "RUN_CONTACTS_20260614_211857Z",
+                              "workload_name":  "contacts",
+                              "snapshot_granularity":  "full",
+                              "is_delta":  false,
+                              "is_validation_extract":  false
+                          }
+}

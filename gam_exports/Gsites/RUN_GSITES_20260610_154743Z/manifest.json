@@ -1,0 +1,106 @@
+﻿{
+    "export_system":  "gam_tool",
+    "source_workload":  "gsites",
+    "export_version":  "1.0",
+    "snapshot_id":  "GSITES_20260610_154743Z",
+    "snapshot_time_utc":  "2026-06-10T15:47:43Z",
+    "run_type":  "assessment",
+    "environment":  "prod",
+    "tenant_name":  "rocheua.com",
+    "exported_by":  "gsites_gam_tool",
+    "delivery_format":  "csv",
+    "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
+    "datasets":  [
+                     {
+                         "dataset_name":  "candidate_forms",
+                         "file_name":  "Candidate_Forms.csv",
+                         "record_count":  19,
+                         "schema_name":  "canonical_candidate_forms",
+                         "description":  "candidate_forms dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "candidate_scripts",
+                         "file_name":  "Candidate_Scripts.csv",
+                         "record_count":  16,
+                         "schema_name":  "canonical_candidate_scripts",
+                         "description":  "candidate_scripts dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "candidate_sheets",
+                         "file_name":  "Candidate_Sheets.csv",
+                         "record_count":  30,
+                         "schema_name":  "canonical_candidate_sheets",
+                         "description":  "candidate_sheets dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "complexity_report",
+                         "file_name":  "Complexity_Report.csv",
+                         "record_count":  1,
+                         "schema_name":  "canonical_complexity_report",
+                         "description":  "complexity_report dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "embeds",
+                         "file_name":  "Embeds.csv",
+                         "record_count":  2,
+                         "schema_name":  "canonical_embeds",
+                         "description":  "embeds dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "externaldomains",
+                         "file_name":  "ExternalDomains.csv",
+                         "record_count":  7,
+                         "schema_name":  "canonical_externaldomains",
+                         "description":  "externaldomains dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "gam_target_users",
+                         "file_name":  "gam_target_users.csv",
+                         "record_count":  8,
+                         "schema_name":  "canonical_gam_target_users",
+                         "description":  "gam_target_users dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "gsites_inventory_detailed",
+                         "file_name":  "GSites_Inventory_Detailed.csv",
+                         "record_count":  1,
+                         "schema_name":  "canonical_gsites_inventory_detailed",
+                         "description":  "gsites_inventory_detailed dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "gsites_inventory_min",
+                         "file_name":  "GSites_Inventory_Min.csv",
+                         "record_count":  1,
+                         "schema_name":  "canonical_gsites_inventory_min",
+                         "description":  "gsites_inventory_min dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "gsites_permissions",
+                         "file_name":  "GSites_Permissions.csv",
+                         "record_count":  1,
+                         "schema_name":  "canonical_gsites_permissions",
+                         "description":  "gsites_permissions dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "networkrequests",
+                         "file_name":  "NetworkRequests.csv",
+                         "record_count":  91,
+                         "schema_name":  "canonical_networkrequests",
+                         "description":  "networkrequests dataset exported from GAM Tool"
+                     },
+                     {
+                         "dataset_name":  "pages",
+                         "file_name":  "Pages.csv",
+                         "record_count":  1,
+                         "schema_name":  "canonical_pages",
+                         "description":  "pages dataset exported from GAM Tool"
+                     }
+                 ],
+    "ingestion_control":  {
+                              "run_id_pattern":  "RUN_GSITES_20260610_154743Z",
+                              "workload_name":  "gsites",
+                              "snapshot_granularity":  "full",
+                              "is_delta":  false,
+                              "is_validation_extract":  false
+                          }
+}

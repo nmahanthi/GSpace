@@ -1,0 +1,29 @@
+﻿{
+    "export_system":  "gam_tool",
+    "source_workload":  "tasks",
+    "export_version":  "1.0",
+    "snapshot_id":  "TASKS_20260614_212007Z",
+    "snapshot_time_utc":  "2026-06-14T21:20:07Z",
+    "run_type":  "assessment",
+    "environment":  "prod",
+    "tenant_name":  "rocheua.com",
+    "exported_by":  "tasks_gam_tool",
+    "delivery_format":  "csv",
+    "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
+    "datasets":  [
+                     {
+                         "dataset_name":  "tasks_targeted_20260615_013614",
+                         "file_name":  "Tasks_Targeted_20260615_013614.csv",
+                         "record_count":  14,
+                         "schema_name":  "canonical_tasks_targeted_20260615_013614",
+                         "description":  "tasks_targeted_20260615_013614 dataset exported from GAM Tool"
+                     }
+                 ],
+    "ingestion_control":  {
+                              "run_id_pattern":  "RUN_TASKS_20260614_212007Z",
+                              "workload_name":  "tasks",
+                              "snapshot_granularity":  "full",
+                              "is_delta":  false,
+                              "is_validation_extract":  false
+                          }
+}
