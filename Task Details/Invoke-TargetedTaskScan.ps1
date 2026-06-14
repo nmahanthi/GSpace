@@ -25,7 +25,9 @@
   Folder for output CSVs. Defaults to the same folder as this script.
 
 .PARAMETER GamPath
-  Path to gam executable. Default: 'gam' (must be on PATH).
+  Path to gam executable. If omitted the script auto-detects GAM by checking
+  PATH and all common install locations (C:\GAM7, C:\GAM, LOCALAPPDATA, etc.).
+  Only supply this if auto-detection fails.
 
 .PARAMETER IncludeCompleted
   Include completed tasks in the output.
@@ -62,7 +64,7 @@ param(
     [string]$UsersFile = (Join-Path $PSScriptRoot 'TargetUsers.txt'),
     [string[]]$Users,
     [string]$OutputDir = $PSScriptRoot,
-    [string]$GamPath = 'gam',
+    [string]$GamPath = '',
     [switch]$IncludeCompleted,
     [switch]$IncludeHidden,
     [switch]$IncludeDeleted,
@@ -73,6 +75,59 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $mainScript = Join-Path $PSScriptRoot 'Get-GoogleTasksWithCreator.ps1'
+
+# ── Auto-detect GAM executable ───────────────────────────────────────────────
+function Find-Gam {
+    # 1. Explicit -GamPath supplied by caller
+    if ($GamPath -and $GamPath -ne '') {
+        if (Test-Path $GamPath) { return $GamPath }
+        throw "GAM not found at the path you supplied: $GamPath"
+    }
+
+    # 2. Already on PATH (works if the user ran 'gam config' setup)
+    $onPath = Get-Command gam -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+
+    # 3. Common fixed install locations (GAM7 installer defaults + variants)
+    $candidates = @(
+        'C:\GAM7\gam.exe',
+        'C:\GAM\gam.exe',
+        (Join-Path $env:LOCALAPPDATA  'GAM7\gam.exe'),
+        (Join-Path $env:LOCALAPPDATA  'GAM\gam.exe'),
+        (Join-Path $env:USERPROFILE   'GAM7\gam.exe'),
+        (Join-Path $env:USERPROFILE   'GAM\gam.exe'),
+        (Join-Path $env:ProgramData   'GAM7\gam.exe'),
+        (Join-Path $env:ProgramData   'GAM\gam.exe'),
+        (Join-Path $env:ProgramFiles  'GAM7\gam.exe'),
+        (Join-Path $env:ProgramFiles  'GAM\gam.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'GAM7\gam.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'GAM\gam.exe')
+    )
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path $c)) { return $c }
+    }
+
+    # 4. Search the GAM config directory for a saved gampath hint
+    $gamCfgDir = Join-Path $env:USERPROFILE '.gam'
+    $gamPathHint = Join-Path $gamCfgDir 'gampath'
+    if (Test-Path $gamPathHint) {
+        $hint = (Get-Content -LiteralPath $gamPathHint -TotalCount 1).Trim()
+        $exe  = Join-Path $hint 'gam.exe'
+        if (Test-Path $exe) { return $exe }
+    }
+
+    throw @"
+Cannot find the GAM executable. Tried PATH, common install folders, and ~/.gam/gampath.
+Fix options:
+  A) Re-run with -GamPath:
+       .\Invoke-TargetedTaskScan.ps1 -GamPath 'C:\GAM7\gam.exe'
+  B) Add GAM to PATH and restart PowerShell.
+  C) Install GAM7: https://github.com/GAM-team/GAM/wiki/How-to-Install-Advanced-GAM
+"@
+}
+
+$resolvedGamPath = Find-Gam
+Write-Host ("GAM detected : {0}" -f $resolvedGamPath) -ForegroundColor DarkGray
 if (-not (Test-Path $mainScript)) {
     throw "Cannot find Get-GoogleTasksWithCreator.ps1 alongside this script at: $mainScript"
 }
@@ -121,7 +176,7 @@ $scriptArgs = @{
     Users      = $resolvedUsers          # pass the already-resolved array directly
     OutputCsv  = $outputCsv
     SummaryCsv = $summaryCsv
-    GamPath    = $GamPath
+    GamPath    = $resolvedGamPath        # always the fully-resolved absolute path
 }
 
 # Switch parameters must be passed as [switch] values in hashtable splatting
