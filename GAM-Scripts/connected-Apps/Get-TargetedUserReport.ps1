@@ -80,6 +80,22 @@ function Write-OK     { param([string]$t); Write-Host "  [OK]   $t" -ForegroundC
 function Write-Warn   { param([string]$t); Write-Host "  [WARN] $t" -ForegroundColor DarkYellow }
 function Write-Fail   { param([string]$t); Write-Host "  [FAIL] $t" -ForegroundColor Red }
 
+# Validate that a path points to a working GAM binary (runs 'gam version' to confirm)
+function Test-GamBinary {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    # Resolve from PATH if it's just a bare command name
+    $resolved = $null
+    $cmd = Get-Command $Path -ErrorAction SilentlyContinue
+    if ($cmd) { $resolved = $cmd.Source }
+    elseif (Test-Path $Path -PathType Leaf) { $resolved = (Resolve-Path $Path).Path }
+    if (-not $resolved) { return $false }
+    try {
+        $ver = & $resolved version 2>&1 | Select-Object -First 4
+        return @($ver | Where-Object { $_ -match "GAM|gam|\d+\.\d+" }).Count -gt 0
+    } catch { return $false }
+}
+
 function SafeCsv {
     param([string]$Path)
     if (Test-Path $Path) {
@@ -115,29 +131,157 @@ Write-Host @"
 
 Write-Banner "0. Locating GAM"
 
-$candidates = @(
-    $GamPath,
-    ".\gam.exe", ".\gam",
-    "$PSScriptRoot\gam.exe", "$PSScriptRoot\gam",
-    "$PWD\gam.exe", "$PWD\gam",
-    "gam",
-    "$env:USERPROFILE\AppData\Local\GAM7\gam.exe",
-    "$env:USERPROFILE\AppData\Local\GAMADV-XTD3\gam.exe",
-    "C:\GAM7\gam.exe", "C:\GAMADV-XTD3\gam.exe",
-    "C:\GAM6\gam.exe", "C:\GAM\gam.exe"
-)
+# ── Config file: remembers a confirmed GAM path across runs ──────────────────
+$script:GamConfigFile = Join-Path $PSScriptRoot ".gampath"
 
-$script:GAM = $null
-foreach ($c in $candidates) {
-    if (-not $c) { continue }
-    $found = Get-Command $c -ErrorAction SilentlyContinue
-    if ($found) { $script:GAM = $found.Source; break }
-    if (Test-Path $c) { $script:GAM = (Resolve-Path $c).Path; break }
+# ── Build candidate list (highest-priority first) ────────────────────────────
+$candidates = [System.Collections.Generic.List[string]]::new()
+
+# 1. Explicit -GamPath parameter
+if ($GamPath) { $candidates.Add($GamPath) }
+
+# 2. Saved path from a previous run
+if (Test-Path $script:GamConfigFile) {
+    $saved = (Get-Content $script:GamConfigFile -Raw -ErrorAction SilentlyContinue).Trim()
+    if ($saved) { $candidates.Add($saved) }
 }
 
+# 3. Current working directory / script directory
+foreach ($base in @(".", $PSScriptRoot, $PWD)) {
+    foreach ($name in @("gam.exe", "gam")) {
+        if ($base) { $candidates.Add((Join-Path $base $name)) }
+    }
+}
+
+# 4. Bare command (resolves via PATH)
+$candidates.Add("gam")
+
+# 5. Well-known Windows install paths
+foreach ($p in @(
+    "$env:USERPROFILE\AppData\Local\GAM7\gam.exe",
+    "$env:USERPROFILE\AppData\Local\GAMADV-XTD3\gam.exe",
+    "$env:USERPROFILE\bin\gam\gam.exe",
+    "C:\GAM7\gam.exe", "C:\GAMADV-XTD3\gam.exe",
+    "C:\GAM6\gam.exe", "C:\GAM\gam.exe",
+    "C:\Program Files\GAM7\gam.exe",
+    "C:\Program Files (x86)\GAM\gam.exe"
+)) { $candidates.Add($p) }
+
+# 6. Every directory in $env:PATH
+($env:PATH -split ";") | Where-Object { $_ } | ForEach-Object {
+    $candidates.Add((Join-Path $_ "gam.exe"))
+    $candidates.Add((Join-Path $_ "gam"))
+}
+
+# 7. Windows Registry (some GAM installers write here)
+foreach ($rk in @("HKLM:\SOFTWARE\GAM", "HKCU:\SOFTWARE\GAM", "HKLM:\SOFTWARE\WOW6432Node\GAM")) {
+    if (Test-Path $rk -ErrorAction SilentlyContinue) {
+        $rval = (Get-ItemProperty $rk -ErrorAction SilentlyContinue).InstallPath
+        if ($rval) { $candidates.Add((Join-Path $rval "gam.exe")) }
+    }
+}
+
+# ── Try each candidate ───────────────────────────────────────────────────────
+$script:GAM = $null
+foreach ($c in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+    # Resolve bare names via PATH; resolve absolute paths directly
+    $resolved = $null
+    $cmd = Get-Command $c -ErrorAction SilentlyContinue
+    if ($cmd) { $resolved = $cmd.Source }
+    elseif (Test-Path $c -PathType Leaf -ErrorAction SilentlyContinue) {
+        $resolved = (Resolve-Path $c).Path
+    }
+    if ($resolved -and (Test-GamBinary $resolved)) {
+        $script:GAM = $resolved
+        Write-OK "GAM auto-detected : $script:GAM"
+        break
+    }
+}
+
+# ── Interactive fallback if auto-detection failed ────────────────────────────
 if (-not $script:GAM) {
-    Write-Fail "GAM not found. Pass -GamPath or run from inside your GAM folder."
-    exit 1
+    Write-Warn "GAM was not found in any standard location."
+    Write-Host ""
+    Write-Host "  Locations searched included:" -ForegroundColor DarkGray
+    $candidates | Where-Object { $_ } | Select-Object -Unique | Select-Object -First 20 |
+        ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Write-Host "    ... (PATH entries, Registry)" -ForegroundColor DarkGray
+    Write-Host ""
+
+    do {
+        Write-Host "  What would you like to do?" -ForegroundColor Cyan
+        Write-Host "    [1] Enter the full path to gam / gam.exe manually" -ForegroundColor White
+        Write-Host "    [2] Search for gam.exe on this machine (scans C:\, D:\, E:\)" -ForegroundColor White
+        Write-Host "    [3] Open the GAM7 / GAMADV-XTD3 download page in your browser" -ForegroundColor White
+        Write-Host "    [Q] Quit" -ForegroundColor White
+        Write-Host ""
+        $choice = (Read-Host "  Choice").Trim().ToUpper()
+
+        switch ($choice) {
+            "1" {
+                $manual = (Read-Host "  Full path to gam.exe").Trim().Trim('"')
+                if (Test-GamBinary $manual) {
+                    $script:GAM = (Resolve-Path $manual).Path
+                    Write-OK "Confirmed working GAM binary: $script:GAM"
+                    $sv = (Read-Host "  Save this path so future runs skip detection? (y/n)").Trim()
+                    if ($sv -match '^[Yy]') {
+                        $script:GAM | Out-File $script:GamConfigFile -Encoding UTF8 -Force
+                        Write-OK "Path saved to $script:GamConfigFile"
+                    }
+                } else {
+                    Write-Warn "That path did not respond to 'gam version' - check it and try again."
+                }
+            }
+
+            "2" {
+                Write-Step "Scanning C:\, D:\, E:\ for gam.exe (this may take 30-60 seconds)..."
+                $drives = @("C:\", "D:\", "E:\") | Where-Object { Test-Path $_ }
+                $hits = $drives | ForEach-Object {
+                    Get-ChildItem -Path $_ -Filter "gam.exe" -Recurse -ErrorAction SilentlyContinue |
+                    Where-Object { $_.FullName -notmatch "\\Windows\\|\\Temp\\" }
+                } | Select-Object -First 10
+
+                if ($hits) {
+                    Write-Host ""
+                    Write-Host "  Found the following gam.exe files:" -ForegroundColor Green
+                    $i = 1
+                    $hits | ForEach-Object { Write-Host "    [$i] $($_.FullName)"; $i++ }
+                    Write-Host ""
+                    $sel = (Read-Host "  Enter number to use (or press Enter to go back)").Trim()
+                    if ($sel -match '^\d+$') {
+                        $idx = [int]$sel - 1
+                        if ($idx -ge 0 -and $idx -lt $hits.Count) {
+                            $chosen = $hits[$idx].FullName
+                            if (Test-GamBinary $chosen) {
+                                $script:GAM = $chosen
+                                Write-OK "Confirmed: $script:GAM"
+                                $sv = (Read-Host "  Save this path for future runs? (y/n)").Trim()
+                                if ($sv -match '^[Yy]') {
+                                    $script:GAM | Out-File $script:GamConfigFile -Encoding UTF8 -Force
+                                    Write-OK "Path saved to $script:GamConfigFile"
+                                }
+                            } else {
+                                Write-Warn "That file did not respond to 'gam version'. Skipping."
+                            }
+                        }
+                    }
+                } else {
+                    Write-Warn "No gam.exe found on the scanned drives."
+                    Write-Host "  Install GAM7 from https://github.com/taers232c/GAMADV-XTD3/releases/latest" -ForegroundColor Yellow
+                }
+            }
+
+            "3" {
+                Start-Process "https://github.com/taers232c/GAMADV-XTD3/releases/latest"
+                Write-Host "  After installing GAM, re-run this script and choose option [1] or [2]." -ForegroundColor Yellow
+            }
+
+            "Q" { Write-Host "  Exiting." -ForegroundColor Gray; exit 0 }
+
+            default { Write-Warn "Invalid choice. Enter 1, 2, 3, or Q." }
+        }
+        Write-Host ""
+    } while (-not $script:GAM)
 }
 
 $verLines   = & $script:GAM version 2>&1 | Select-Object -First 5
