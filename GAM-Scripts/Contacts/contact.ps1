@@ -1,7 +1,8 @@
 param(
     [string]$OutputCsv = ".\ContactDelegates_Final.csv",
     [string]$WorkingFolder = ".\GAM_ContactDelegates_Work",
-    [string]$GamExe = ""
+    [string]$GamExe = "",
+    [string]$ConfigFile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,22 +34,100 @@ function Confirm-Folder {
     }
 }
 
-function Resolve-GamExe {
-    param([string]$GamExe)
+function Get-GamConfig {
+    param([string]$ConfigFile)
 
     $candidates = New-Object System.Collections.Generic.List[string]
 
-    if ($GamExe) {
-        $candidates.Add($GamExe)
+    if ($ConfigFile) {
+        $candidates.Add((Resolve-AbsolutePath -Path $ConfigFile))
     }
 
     if ($PSScriptRoot) {
-        $candidates.Add((Join-Path $PSScriptRoot "gam.exe"))
+        $candidates.Add((Join-Path $PSScriptRoot "gam.config.json"))
+        $candidates.Add((Join-Path $PSScriptRoot "contact.config.json"))
     }
 
-    $candidates.Add("C:\GAM7\gam.exe")
-    $candidates.Add("C:\GAMADV-XTD3\gam.exe")
-    $candidates.Add("C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\gam7\gam.exe")
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE ".gam-scripts.json"))
+    }
+
+    foreach ($path in ($candidates | Select-Object -Unique)) {
+        if ($path -and (Test-Path -LiteralPath $path)) {
+            try {
+                $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 |
+                ConvertFrom-Json
+                Write-Log "Loaded config: $path"
+                return $json
+            }
+            catch {
+                Write-Log "WARNING: Failed to parse config '$path': $($_.Exception.Message)"
+            }
+        }
+    }
+
+    return $null
+}
+
+function Resolve-GamExe {
+    param(
+        [string]$GamExe,
+        [object]$Config
+    )
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    function Add-GamCandidate {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        if ((Split-Path -Leaf $Path) -ieq "gam.exe") {
+            $candidates.Add($Path)
+        }
+        else {
+            $candidates.Add((Join-Path $Path "gam.exe"))
+        }
+    }
+
+    if ($GamExe) { Add-GamCandidate $GamExe }
+
+    # 1. Explicit environment overrides
+    foreach ($envVar in @("GAM", "GAM_EXE", "GAM_PATH", "GAMPATH")) {
+        Add-GamCandidate ([Environment]::GetEnvironmentVariable($envVar))
+    }
+
+    # 2. Value from config file (GamExe or GamPath)
+    if ($Config) {
+        foreach ($key in @("GamExe", "GamPath", "gamExe", "gamPath")) {
+            $value = $Config.PSObject.Properties[$key]
+            if ($value -and $value.Value) { Add-GamCandidate ([string]$value.Value) }
+        }
+    }
+
+    # 3. Alongside this script
+    if ($PSScriptRoot) {
+        Add-GamCandidate (Join-Path $PSScriptRoot "gam.exe")
+        Add-GamCandidate (Join-Path $PSScriptRoot "gam7\gam.exe")
+        Add-GamCandidate (Join-Path $PSScriptRoot "GAMADV-XTD3\gam.exe")
+    }
+
+    # 4. Well-known install roots (drive roots, Program Files, user profile)
+    $roots = @(
+        "C:\", "D:\",
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:LOCALAPPDATA,
+        $env:APPDATA,
+        $env:USERPROFILE,
+        (Join-Path $env:USERPROFILE "Documents")
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+
+    $subdirs = @("GAM7", "gam7", "GAM", "gam", "GAMADV-XTD3", "GAMADV-XTD")
+
+    foreach ($root in $roots) {
+        foreach ($sub in $subdirs) {
+            Add-GamCandidate (Join-Path $root (Join-Path $sub "gam.exe"))
+        }
+    }
 
     foreach ($candidate in ($candidates | Select-Object -Unique)) {
         if ($candidate -and (Test-Path -LiteralPath $candidate)) {
@@ -56,12 +135,23 @@ function Resolve-GamExe {
         }
     }
 
-    $cmd = Get-Command gam -ErrorAction SilentlyContinue
-    if ($cmd) {
-        return $cmd.Source
+    # 5. PATH lookup (gam.exe or gam.bat shim)
+    foreach ($name in @("gam.exe", "gam.bat", "gam.cmd", "gam")) {
+        $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cmd -and $cmd.Source) { return $cmd.Source }
     }
 
-    throw "GAM executable not found."
+    # 6. Last-resort recursive search of common roots (depth-limited)
+    foreach ($root in $roots) {
+        try {
+            $found = Get-ChildItem -LiteralPath $root -Filter "gam.exe" -Recurse -Depth 4 `
+                -ErrorAction SilentlyContinue -Force | Select-Object -First 1
+            if ($found) { return $found.FullName }
+        }
+        catch { }
+    }
+
+    throw "GAM executable not found. Pass -GamExe <path>, set the GAM environment variable, or add a 'GamExe' entry to gam.config.json."
 }
 
 function Join-NativeArguments {
@@ -238,7 +328,8 @@ function Get-DelegateEmailsFromRow {
     return $emails | Sort-Object -Unique
 }
 
-$script:GamExeResolved = Resolve-GamExe -GamExe $GamExe
+$script:Config = Get-GamConfig -ConfigFile $ConfigFile
+$script:GamExeResolved = Resolve-GamExe -GamExe $GamExe -Config $script:Config
 Write-Log "Using GAM executable: $script:GamExeResolved"
 
 Write-Log "Validating GAM executable..."
