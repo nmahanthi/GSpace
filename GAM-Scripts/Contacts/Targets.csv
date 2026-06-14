@@ -1,0 +1,34 @@
+# TargetUsers.txt — Targeted Google Tasks scan user list
+# -------------------------------------------------------
+# Add one primaryEmail address per line.
+# Lines starting with '#' and blank lines are ignored.
+#
+# Usage:
+#   .\Invoke-TargetedTaskScan.ps1
+#       (reads this file automatically)
+#
+#   .\Invoke-TargetedTaskScan.ps1 -UsersFile .\TargetUsers.txt
+#       (explicit path)
+#
+#   .\Invoke-TargetedTaskScan.ps1 -Users alice@example.com,bob@example.com
+#       (inline list, bypasses this file)
+#
+# Tip: you can also export from the Admin console and paste the
+#      primaryEmail column here — duplicate/blank lines are skipped.
+# -------------------------------------------------------
+
+utsab@rocheua.com
+admin-aishwarya@rocheua.com
+admin-latha@rocheua.com
+admin-madhusudhan@rocheua.com
+admin-mahesh@rocheua.com
+admin-manik@rocheua.com
+admin-marco@rocheua.com
+admin-narendra@rocheua.com
+admin-nikunj@rocheua.com
+admin-prema@rocheua.com
+admin-ranjan@rocheua.com
+admin-rituraj@rocheua.com
+admin-tamanna@rocheua.com
+ameya@rocheua.com
+
