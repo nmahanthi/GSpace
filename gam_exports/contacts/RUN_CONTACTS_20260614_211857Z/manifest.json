@@ -12,11 +12,11 @@
     "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
     "datasets":  [
                      {
-                         "dataset_name":  "contactdelegates_final",
+                         "dataset_name":  "contacts_delegates",
                          "file_name":  "ContactDelegates_Final.csv",
                          "record_count":  2,
-                         "schema_name":  "canonical_contactdelegates_final",
-                         "description":  "contactdelegates_final dataset exported from GAM Tool"
+                         "schema_name":  "canonical_contacts_delegates",
+                         "description":  "contacts_delegates dataset exported from GAM Tool"
                      }
                  ],
     "ingestion_control":  {

@@ -12,11 +12,11 @@
     "file_naming_convention":  "{dataset}_{snapshot_id}_B{NNN}.csv",
     "datasets":  [
                      {
-                         "dataset_name":  "tasks_targeted_20260615_013614",
+                         "dataset_name":  "tasks_targeted",
                          "file_name":  "Tasks_Targeted_20260615_013614.csv",
                          "record_count":  14,
-                         "schema_name":  "canonical_tasks_targeted_20260615_013614",
-                         "description":  "tasks_targeted_20260615_013614 dataset exported from GAM Tool"
+                         "schema_name":  "canonical_tasks_targeted",
+                         "description":  "tasks_targeted dataset exported from GAM Tool"
                      }
                  ],
     "ingestion_control":  {
