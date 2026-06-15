@@ -50,7 +50,8 @@ param(
     [switch]$SkipDocCommentScan,
     [switch]$ForceDocCommentScan,
     [switch]$IncludeResolvedDocComments,
-    [string]$GamPath = 'gam'
+    [string]$GamPath = 'gam',
+    [string]$KeyFile = ''
 )
 if (-not $SummaryCsv) {
     $SummaryCsv = [IO.Path]::ChangeExtension($OutputCsv, $null).TrimEnd('.') + '_Summary.csv'
@@ -493,6 +494,7 @@ function Invoke-TenantAssignedTasksBulk {
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ("restusers_" + [guid]::NewGuid().ToString('N').Substring(0, 10) + ".txt")
     ($Users -join "`r`n") | Out-File -FilePath $tmp -Encoding ASCII
     $hargs = @('-NoProfile', '-NoLogo', '-File', $PwshHelper, '-UsersFile', $tmp, '-Parallel', [string]$RestParallel)
+    if ($KeyFile) { $hargs += '-KeyFile'; $hargs += $KeyFile }
     if ($IncludeCompleted) { $hargs += '-IncludeCompleted' }
     if ($IncludeHidden) { $hargs += '-IncludeHidden' }
     if ($IncludeDeleted) { $hargs += '-IncludeDeleted' }
@@ -536,6 +538,7 @@ function Get-AssignedTasksViaRest {
     if ($restAssignedCache.ContainsKey($User)) { return $restAssignedCache[$User] }
     if (-not $PwshPath) { $restAssignedCache[$User] = @(); return @() }
     $hargs = @('-NoProfile', '-NoLogo', '-File', $PwshHelper, '-User', $User)
+    if ($KeyFile) { $hargs += '-KeyFile'; $hargs += $KeyFile }
     if ($IncludeCompleted) { $hargs += '-IncludeCompleted' }
     if ($IncludeHidden) { $hargs += '-IncludeHidden' }
     if ($IncludeDeleted) { $hargs += '-IncludeDeleted' }

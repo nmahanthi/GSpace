@@ -19,9 +19,25 @@
     #
     # Examples:
     #   GamPath = 'C:\GAM7\gam.exe'
-    #   GamPath = 'D:\Tools\GAM\gam.exe'
+    #   GamPath = 'E:\GAM-Roche\gam.exe'
     # ------------------------------------------------------------------
     GamPath = ''
+
+    # ------------------------------------------------------------------
+    # STEP 1b — GAM service-account key file (oauth2service.json)
+    # ------------------------------------------------------------------
+    # Required for the REST-based assigned-task fetch (Docs/Chat tasks).
+    # Leave blank to auto-detect: the script checks the GAM config folder,
+    # the folder next to gam.exe, and the %GAMCFGDIR% environment variable.
+    #
+    # To find your key file run:  gam info domain
+    # and look for the "Service Account" or "Config File" line.
+    #
+    # Examples:
+    #   KeyFile = 'C:\Users\admin\.gam\oauth2service.json'
+    #   KeyFile = 'E:\GAM-Roche\oauth2service.json'
+    # ------------------------------------------------------------------
+    KeyFile = ''
 
     # ------------------------------------------------------------------
     # STEP 2 — User list file

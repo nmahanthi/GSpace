@@ -70,6 +70,7 @@ param(
     [string[]]$Users,
     [string]$OutputDir,
     [string]$GamPath = '',
+    [string]$KeyFile = '',
     [switch]$IncludeCompleted,
     [switch]$IncludeHidden,
     [switch]$IncludeDeleted,
@@ -93,7 +94,8 @@ else {
 
 # Apply config values for settings that were NOT explicitly passed
 # (switches default to $false so we check the config to honour $true there)
-if (-not $GamPath)       { $GamPath  = if ($cfg.GamPath)  { $cfg.GamPath  } else { '' } }
+if (-not $GamPath)       { $GamPath   = if ($cfg.GamPath  -and $cfg.GamPath  -ne '') { $cfg.GamPath  } else { '' } }
+if (-not $KeyFile)       { $KeyFile   = if ($cfg.KeyFile   -and $cfg.KeyFile   -ne '') { $cfg.KeyFile   } else { '' } }
 if (-not $UsersFile)     { $UsersFile = if ($cfg.UsersFile -and $cfg.UsersFile -ne '') { $cfg.UsersFile } else { Join-Path $PSScriptRoot 'TargetUsers.txt' } }
 if (-not $OutputDir)     { $OutputDir = if ($cfg.OutputDir -and $cfg.OutputDir -ne '') { $cfg.OutputDir } else { $PSScriptRoot } }
 if (-not $IncludeCompleted.IsPresent -and $cfg.IncludeCompleted) { $IncludeCompleted = [switch]$true }
@@ -154,6 +156,59 @@ Fix options:
 
 $resolvedGamPath = Find-Gam
 Write-Host ("GAM detected : {0}" -f $resolvedGamPath) -ForegroundColor DarkGray
+
+# ── Auto-detect oauth2service.json key file ──────────────────────────────────
+function Find-GamKeyFile {
+    param([string]$GamExePath)
+
+    # 1. Explicit -KeyFile supplied by caller or config file
+    if ($KeyFile -and $KeyFile -ne '') {
+        if (Test-Path $KeyFile) { return $KeyFile }
+        throw "oauth2service.json not found at the path you specified: $KeyFile"
+    }
+
+    # 2. GAMCFGDIR environment variable (overrides default GAM config location)
+    if ($env:GAMCFGDIR) {
+        $c = Join-Path $env:GAMCFGDIR 'oauth2service.json'
+        if (Test-Path $c) { return $c }
+    }
+
+    # 3. Default GAM config folder: %USERPROFILE%\.gam\
+    $c = Join-Path $env:USERPROFILE '.gam\oauth2service.json'
+    if (Test-Path $c) { return $c }
+
+    # 4. Same folder as gam.exe  (some installs keep config alongside the exe)
+    if ($GamExePath) {
+        $c = Join-Path (Split-Path $GamExePath) 'oauth2service.json'
+        if (Test-Path $c) { return $c }
+    }
+
+    # 5. Common alternative GAM config locations
+    $candidates = @(
+        (Join-Path $env:USERPROFILE   '.gam7\oauth2service.json'),
+        (Join-Path $env:LOCALAPPDATA  'GAM7\oauth2service.json'),
+        (Join-Path $env:LOCALAPPDATA  'GAM\oauth2service.json'),
+        (Join-Path $env:ProgramData   'GAM7\oauth2service.json'),
+        (Join-Path $env:ProgramData   'GAM\oauth2service.json')
+    )
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path $c)) { return $c }
+    }
+
+    # 6. Not found — warn but do not throw; the REST pass is optional
+    Write-Warning @"
+oauth2service.json not found. The REST-based assigned-task fetch (Docs/Chat tasks) will be skipped.
+To fix, set KeyFile in TaskScan.config.psd1:
+  KeyFile = 'C:\Users\<you>\.gam\oauth2service.json'
+To locate the file, run:  gam info domain
+"@
+    return ''
+}
+
+$resolvedKeyFile = Find-GamKeyFile -GamExePath $resolvedGamPath
+if ($resolvedKeyFile) {
+    Write-Host ("Key file     : {0}" -f $resolvedKeyFile) -ForegroundColor DarkGray
+}
 if (-not (Test-Path $mainScript)) {
     throw "Cannot find Get-GoogleTasksWithCreator.ps1 alongside this script at: $mainScript"
 }
@@ -203,6 +258,7 @@ $scriptArgs = @{
     OutputCsv  = $outputCsv
     SummaryCsv = $summaryCsv
     GamPath    = $resolvedGamPath        # always the fully-resolved absolute path
+    KeyFile    = $resolvedKeyFile        # '' if not found; helper will warn and skip REST pass
 }
 
 # Switch parameters must be passed as [switch] values in hashtable splatting

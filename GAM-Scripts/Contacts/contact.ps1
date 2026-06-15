@@ -1,9 +1,14 @@
+[CmdletBinding()]
 param(
     [string]$OutputCsv = ".\ContactDelegates_Final.csv",
     [string]$WorkingFolder = ".\GAM_ContactDelegates_Work",
     [string]$GamExe = "",
     [string]$ConfigFile = "",
+
+    [Alias("User", "TargetUsers", "TargetUser")]
     [string[]]$Users = @(),
+
+    [Alias("UserFile", "Targets", "TargetsFile", "TargetsCsv", "InputCsv", "InputFile")]
     [string]$UsersFile = ""
 )
 
