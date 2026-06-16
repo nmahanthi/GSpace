@@ -1,17 +1,42 @@
 # =============================================================================
 # Get-ChatAttachments.ps1
-# Audits Google Chat attachment count + size per Space / Group Chat
+# Audits Google Chat attachment count + size per Space / Group Chat / DM
 #
-# Phase 1  Pull all Spaces (asadmin) -> deduplicate -> pick one member runner
-# Phase 2  Per-space: gam print chatmessages fields attachment -> parse rows
-# Phase 3a Drive-source attachments -> gam show fileinfo -> real byte count
-# Phase 3b Uploaded/inline attachments -> HEAD on downloadUri -> Content-Length
+# USAGE EXAMPLES
+#   # All users (full tenant)
+#   .\Get-ChatAttachments.ps1
 #
-# Outputs
-#   CHAT_ATTACH_DETAIL_<ts>.csv      one row per attachment (all spaces)
-#   CHAT_ATTACH_PER_SPACE_<ts>.csv   aggregated totals per space
-#   CHAT_ATTACH_TOP_LARGEST_<ts>.csv top 100 largest attachments
+#   # One specific user
+#   .\Get-ChatAttachments.ps1 -User john@domain.com
+#
+#   # Several users inline
+#   .\Get-ChatAttachments.ps1 -User "john@domain.com","jane@domain.com"
+#
+#   # From a file
+#   .\Get-ChatAttachments.ps1 -Mode TargetUsers
+#
+#   # Spaces only, no DMs, fastest
+#   .\Get-ChatAttachments.ps1 -Mode AdminOnly
+#
+#   # Narrow to last 30 days, flag anything > 5 MB
+#   .\Get-ChatAttachments.ps1 -User john@domain.com -Days 30 -LargeMB 5
+#
+# PARAMETERS
+#   -User       One or more email addresses.  Overrides Mode -> TargetUsers.
+#   -Mode       AllUsers | TargetUsers | AdminOnly  (default: AllUsers)
+#   -Days       How many days back to scan messages (default: 90)
+#   -LargeMB    Flag threshold in MB for "large" attachments (default: 10)
+#   -NoDMs      Switch: skip Direct Message spaces
 # =============================================================================
+[CmdletBinding()]
+param(
+    [string[]] $User,
+    [ValidateSet("AllUsers","TargetUsers","AdminOnly")]
+    [string]   $Mode,
+    [int]      $Days,
+    [int]      $LargeMB,
+    [switch]   $NoDMs
+)
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 $AdminEmail          = "admin-narendra@rocheua.com"
@@ -35,6 +60,20 @@ $RunMode             = "AllUsers"    # AllUsers | TargetUsers | AdminOnly
 # One email per line (plain .txt)  OR  CSV with column User / Email / primaryEmail
 $TargetUsersFile     = Join-Path $PSScriptRoot "TargetUsers.txt"
 
+# ── APPLY COMMAND-LINE PARAM OVERRIDES ────────────────────────────────────────
+# -User  supplied  -> switch to TargetUsers mode, use those emails directly
+if ($User -and $User.Count -gt 0) {
+    $RunMode = "TargetUsers"
+    # Store inline list; Load-TargetUsers will return this instead of reading a file
+    $InlineTargetUsers = @($User | ForEach-Object { $_.Trim() } | Where-Object { $_ -match "@" })
+} else {
+    $InlineTargetUsers = $null
+}
+if ($Mode)    { $RunMode        = $Mode    }
+if ($Days)    { $TimeWindowDays = $Days    }
+if ($LargeMB) { $LargeFileMB   = $LargeMB }
+if ($NoDMs)   { $IncludeDMs    = $false   }
+
 # ── EXISTING ADMIN SPACE LIST (for AllUsers / AdminOnly modes) ─────────────────
 # chat_spaces_target.csv from the BOT/CHAT run gives User + name + spaceType.
 # Script re-pulls automatically if the path does not exist.
@@ -52,6 +91,9 @@ Write-Host "  Google Chat Attachment Audit (GAM7 Hybrid)" -ForegroundColor Cyan
 Write-Host ("=" * 60) -ForegroundColor Cyan
 Write-Host "Admin       : $AdminEmail"
 Write-Host "Mode        : $RunMode"
+if ($InlineTargetUsers) {
+    Write-Host "Users       : $($InlineTargetUsers -join ', ')" -ForegroundColor Green
+}
 Write-Host "Window      : Last $TimeWindowDays days"
 Write-Host "Include DMs : $IncludeDMs"
 Write-Host "Large flag  : > $LargeFileMB MB"
@@ -153,10 +195,16 @@ function Load-AdminSpaces {
     Add-ToSpaceMap $rows $null
 }
 
-# ── Sub-function: load target user list from file ─────────────────────────────
+# ── Sub-function: load target user list (inline -User param OR file) ──────────
 function Load-TargetUsers {
+    # Inline -User param takes priority over file
+    if ($script:InlineTargetUsers -and $script:InlineTargetUsers.Count -gt 0) {
+        Write-Host "   Using inline -User list: $($script:InlineTargetUsers -join ', ')" -ForegroundColor Green
+        return $script:InlineTargetUsers
+    }
     if (-not (Test-Path $script:TargetUsersFile)) {
         Write-Host "   ERROR: TargetUsersFile not found: $($script:TargetUsersFile)" -ForegroundColor Red
+        Write-Host "   Tip: pass emails directly with  -User user@domain.com" -ForegroundColor Yellow
         exit 1
     }
     $ext = [System.IO.Path]::GetExtension($script:TargetUsersFile).ToLower()
@@ -167,7 +215,8 @@ function Load-TargetUsers {
                 Select-Object -First 1
         return @($rows | Select-Object -ExpandProperty $col | Where-Object { $_ -match "@" })
     } else {
-        return @(Get-Content $script:TargetUsersFile | Where-Object { $_.Trim() -match "@" } |
+        return @(Get-Content $script:TargetUsersFile |
+                 Where-Object { $_.Trim() -match "@" } |
                  ForEach-Object { $_.Trim() })
     }
 }
