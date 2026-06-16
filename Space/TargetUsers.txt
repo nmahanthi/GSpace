@@ -1,0 +1,8 @@
+# TargetUsers.txt
+# Used by Get-ChatAttachments.ps1 when RunMode = "TargetUsers"
+# One user email per line. Lines starting with # are ignored.
+# You can also use a CSV file with a User / Email / primaryEmail column.
+#
+admin-narendra@rocheua.com
+dan_marius.dumitrescu@rocheua.com
+utsab@rocheua.com

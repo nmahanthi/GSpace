@@ -20,13 +20,24 @@ $OutputDir           = $PSScriptRoot
 $Timestamp           = Get-Date -Format "yyyyMMdd_HHmmss"
 $TimeWindowDays      = 90          # how far back to scan messages
 $LargeFileMB         = 10         # flag threshold for "large" attachments
-$IncludeGroupChats   = $true      # include GROUP_CHAT spaces (not only SPACE)
+$IncludeGroupChats   = $true      # include GROUP_CHAT spaces
+$IncludeDMs          = $true      # include Direct Message spaces (needs per-user calls)
 $HeadTimeoutSec      = 10         # timeout per HEAD request for upload sizing
 $MaxHeadRequests     = 500        # cap to avoid rate-limit on large tenants
 
-# ── EXISTING SPACE LIST (reuse if fresh, else re-pull) ────────────────────────
-# chat_spaces_target.csv produced by the BOT/CHAT run already has User + name
-# + spaceType which is exactly what we need.
+# ── RUN MODE ──────────────────────────────────────────────────────────────────
+#   AllUsers    : all named Spaces (asadmin) + every user's DMs (per-user)
+#   TargetUsers : only spaces/DMs for users listed in $TargetUsersFile
+#   AdminOnly   : original - only spaces visible asadmin, no DMs
+$RunMode             = "AllUsers"    # AllUsers | TargetUsers | AdminOnly
+
+# Used only when RunMode = "TargetUsers"
+# One email per line (plain .txt)  OR  CSV with column User / Email / primaryEmail
+$TargetUsersFile     = Join-Path $PSScriptRoot "TargetUsers.txt"
+
+# ── EXISTING ADMIN SPACE LIST (for AllUsers / AdminOnly modes) ─────────────────
+# chat_spaces_target.csv from the BOT/CHAT run gives User + name + spaceType.
+# Script re-pulls automatically if the path does not exist.
 $ExistingSpaceCsv    = Join-Path (Split-Path $PSScriptRoot) `
     "gam_exports\Bot&Chat App related_usingGAM\RUN_BOTCHAT_20260615_154743Z\chat_spaces_target.csv"
 
@@ -40,7 +51,9 @@ Write-Host ("=" * 60) -ForegroundColor Cyan
 Write-Host "  Google Chat Attachment Audit (GAM7 Hybrid)" -ForegroundColor Cyan
 Write-Host ("=" * 60) -ForegroundColor Cyan
 Write-Host "Admin       : $AdminEmail"
+Write-Host "Mode        : $RunMode"
 Write-Host "Window      : Last $TimeWindowDays days"
+Write-Host "Include DMs : $IncludeDMs"
 Write-Host "Large flag  : > $LargeFileMB MB"
 Write-Host "Timestamp   : $Timestamp"
 Write-Host ""
@@ -67,50 +80,171 @@ function Get-Col($row, [string[]]$names) {
     return ""
 }
 
-# =============================================================================
-# PHASE 1 – Build unique space list with a runner user per space
-# =============================================================================
-Write-Host "[1/3] Building space list..." -ForegroundColor Yellow
-
-$spaceRows = $null
-if (Test-Path $ExistingSpaceCsv) {
-    $spaceRows = Import-Csv $ExistingSpaceCsv
-    Write-Host "   Loaded existing space CSV: $($spaceRows.Count) rows"
-} else {
-    Write-Host "   Existing CSV not found - pulling fresh from GAM..." -ForegroundColor DarkYellow
-    $tmpSpaces = Join-Path $OutputDir "tmp_spaces_$Timestamp.csv"
-    & $GamPath redirect csv $tmpSpaces user $AdminEmail print chatspaces asadmin `
-        fields "name,displayname,spacetype,membershipcount,createtime,lastactivetime"
-    Wait-ForFile $tmpSpaces
-    $spaceRows = Import-Csv $tmpSpaces
-    Remove-Item $tmpSpaces -Force -ErrorAction SilentlyContinue
-    Write-Host "   Pulled $($spaceRows.Count) space rows"
+# ── HELPER: pull chatspaces for a single user, return rows ────────────────────
+function Get-UserSpaces($userEmail, [string[]]$types) {
+    $typeArg = $types -join ","
+    $tmp     = Join-Path $OutputDir "tmp_uspaces_${Timestamp}.csv"
+    if (Test-Path $tmp) { Remove-Item $tmp -Force }
+    & $GamPath redirect csv $tmp user $userEmail print chatspaces `
+        types $typeArg `
+        fields "name,displayname,spacetype,membershipcount,createtime,lastactivetime,spaceuri" 2>$null
+    $rows = @()
+    if (Test-Path $tmp) {
+        $rows = @(Import-Csv $tmp)
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    }
+    return $rows
 }
 
-# Deduplicate: one runner per unique space name
-$allowedTypes = @("SPACE")
-if ($IncludeGroupChats) { $allowedTypes += "GROUP_CHAT" }
-
-$spacemap = @{}   # key = spaces/XXX -> @{ Runner; DisplayName; SpaceType; MemberCount; SpaceUri }
-foreach ($r in $spaceRows) {
-    $sname = (Get-Col $r "name").Trim()
-    $stype = (Get-Col $r "spaceType","spacetype").Trim().ToUpper()
-    if (-not $sname -or $spacemap.ContainsKey($sname)) { continue }
-    if ($stype -notin $allowedTypes) { continue }
-    $runner = Get-Col $r "User","TargetUser"
-    if (-not $runner) { $runner = $AdminEmail }
-    $spacemap[$sname] = [ordered]@{
-        Runner      = $runner
-        DisplayName = Get-Col $r "displayName","displayname"
-        SpaceType   = $stype
-        MemberCount = Get-Col $r "membershipCount.joinedDirectHumanUserCount","membershipcount"
-        SpaceUri    = Get-Col $r "spaceUri","spaceuri"
-        CreateTime  = Get-Col $r "createTime","createtime"
-        LastActive  = Get-Col $r "lastActiveTime","lastactivetime"
+# ── HELPER: merge rows into $spacemap (deduplicates by space name) ────────────
+function Add-ToSpaceMap($rows, $runnerHint) {
+    foreach ($r in $rows) {
+        $sname = (Get-Col $r "name").Trim()
+        $stype = (Get-Col $r "spaceType","spacetype").Trim().ToUpper()
+        if (-not $sname -or $script:spacemap.ContainsKey($sname)) { continue }
+        if ($stype -notin $script:allowedTypes) { continue }
+        $runner = if ($runnerHint) { $runnerHint } else {
+            $v = Get-Col $r "User","TargetUser"
+            if ($v) { $v } else { $script:AdminEmail }
+        }
+        $script:spacemap[$sname] = [ordered]@{
+            Runner      = $runner
+            DisplayName = Get-Col $r "displayName","displayname"
+            SpaceType   = $stype
+            MemberCount = Get-Col $r "membershipCount.joinedDirectHumanUserCount","membershipcount"
+            SpaceUri    = Get-Col $r "spaceUri","spaceuri"
+            CreateTime  = Get-Col $r "createTime","createtime"
+            LastActive  = Get-Col $r "lastActiveTime","lastactivetime"
+        }
     }
 }
-$uniqueSpaces = $spacemap.Keys | Sort-Object
-Write-Host "   Unique spaces to scan : $($uniqueSpaces.Count)" -ForegroundColor Green
+
+# =============================================================================
+# PHASE 1 – Build unique space list  (mode-aware)
+#
+#   AdminOnly   : asadmin CSV -> SPACE + GROUP_CHAT only, no DMs
+#   AllUsers    : asadmin CSV for SPACE/GROUP_CHAT  +  per-user pull for DMs
+#   TargetUsers : per-user pull for each target (SPACE + GROUP_CHAT + DMs)
+# =============================================================================
+Write-Host "[1/3] Building space list  (mode: $RunMode)..." -ForegroundColor Yellow
+
+$allowedTypes = [System.Collections.Generic.List[string]]@("SPACE")
+if ($IncludeGroupChats) { $allowedTypes.Add("GROUP_CHAT") }
+if ($IncludeDMs -and $RunMode -ne "AdminOnly") { $allowedTypes.Add("DIRECT_MESSAGE") }
+
+$spacemap = @{}   # spaces/XXX -> { Runner; DisplayName; SpaceType; ... }
+
+# ── Sub-function: load asadmin space CSV (SPACE + GROUP_CHAT) ─────────────────
+function Load-AdminSpaces {
+    $rows = $null
+    if (Test-Path $script:ExistingSpaceCsv) {
+        $rows = @(Import-Csv $script:ExistingSpaceCsv)
+        Write-Host "   Loaded admin space CSV  : $($rows.Count) rows"
+    } else {
+        Write-Host "   Admin CSV not found - re-pulling asadmin..." -ForegroundColor DarkYellow
+        $tmp = Join-Path $script:OutputDir "tmp_adminspaces_$($script:Timestamp).csv"
+        & $script:GamPath redirect csv $tmp user $script:AdminEmail print chatspaces asadmin `
+            fields "name,displayname,spacetype,membershipcount,createtime,lastactivetime,spaceuri" 2>$null
+        Wait-ForFile $tmp
+        $rows = @(Import-Csv $tmp)
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host "   Pulled $($rows.Count) admin space rows"
+    }
+    Add-ToSpaceMap $rows $null
+}
+
+# ── Sub-function: load target user list from file ─────────────────────────────
+function Load-TargetUsers {
+    if (-not (Test-Path $script:TargetUsersFile)) {
+        Write-Host "   ERROR: TargetUsersFile not found: $($script:TargetUsersFile)" -ForegroundColor Red
+        exit 1
+    }
+    $ext = [System.IO.Path]::GetExtension($script:TargetUsersFile).ToLower()
+    if ($ext -eq ".csv") {
+        $rows = Import-Csv $script:TargetUsersFile
+        $col  = $rows[0].PSObject.Properties.Name |
+                Where-Object { $_ -match "user|email|primaryemail" } |
+                Select-Object -First 1
+        return @($rows | Select-Object -ExpandProperty $col | Where-Object { $_ -match "@" })
+    } else {
+        return @(Get-Content $script:TargetUsersFile | Where-Object { $_.Trim() -match "@" } |
+                 ForEach-Object { $_.Trim() })
+    }
+}
+
+# ── BRANCH BY RUN MODE ────────────────────────────────────────────────────────
+switch ($RunMode) {
+
+    "AdminOnly" {
+        # SPACE + GROUP_CHAT only via asadmin — original behaviour
+        Load-AdminSpaces
+    }
+
+    "AllUsers" {
+        # Step A: SPACE + GROUP_CHAT from asadmin (fast, comprehensive)
+        Load-AdminSpaces
+
+        # Step B: DMs — must be pulled per-user (admin is not a DM participant)
+        if ($IncludeDMs) {
+            Write-Host "   Pulling all-user list for DM scan..." -ForegroundColor DarkYellow
+            $tmpUsers = Join-Path $OutputDir "tmp_allusers_$Timestamp.csv"
+            & $GamPath redirect csv $tmpUsers print users fields primaryEmail 2>$null
+            Wait-ForFile $tmpUsers
+            $allUsers = @(Import-Csv $tmpUsers | Select-Object -ExpandProperty primaryEmail |
+                          Where-Object { $_ -match "@" })
+            Remove-Item $tmpUsers -Force -ErrorAction SilentlyContinue
+            Write-Host "   Users found : $($allUsers.Count)"
+
+            $ui = 0
+            foreach ($u in $allUsers) {
+                $ui++
+                if ($ui % 25 -eq 0) {
+                    Write-Host ("   DM scan: {0}/{1} users processed ({2} DMs so far)" `
+                        -f $ui, $allUsers.Count, `
+                        ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count) `
+                        -ForegroundColor DarkGray
+                }
+                $dmRows = Get-UserSpaces $u @("directmessage")
+                Add-ToSpaceMap $dmRows $u
+            }
+            Write-Host ("   DM spaces added : {0}" `
+                -f ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count) `
+                -ForegroundColor Green
+        }
+    }
+
+    "TargetUsers" {
+        # Pull every space type per target user (scopes to their actual memberships)
+        $targetUsers = Load-TargetUsers
+        Write-Host "   Target users loaded : $($targetUsers.Count)"
+
+        $typeArgs = [System.Collections.Generic.List[string]]@("space","groupchat")
+        if ($IncludeDMs) { $typeArgs.Add("directmessage") }
+
+        $ti = 0
+        foreach ($u in $targetUsers) {
+            $ti++
+            Write-Host ("  [{0,3}/{1}] {2}" -f $ti, $targetUsers.Count, $u) -ForegroundColor DarkCyan
+            $rows = Get-UserSpaces $u $typeArgs
+            Add-ToSpaceMap $rows $u
+        }
+    }
+
+    default {
+        Write-Host "   ERROR: Unknown RunMode '$RunMode'. Use AllUsers, TargetUsers, or AdminOnly." `
+            -ForegroundColor Red
+        exit 1
+    }
+}
+
+$uniqueSpaces = @($spacemap.Keys | Sort-Object)
+$dmCount      = ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count
+$spaceCount   = ($spacemap.Values | Where-Object { $_.SpaceType -eq "SPACE" }).Count
+$gcCount      = ($spacemap.Values | Where-Object { $_.SpaceType -eq "GROUP_CHAT" }).Count
+
+Write-Host ""
+Write-Host ("   Unique spaces to scan : {0}  (SPACE:{1}  GROUP_CHAT:{2}  DM:{3})" `
+    -f $uniqueSpaces.Count, $spaceCount, $gcCount, $dmCount) -ForegroundColor Green
 
 # =============================================================================
 # PHASE 2 – Per-space: pull messages, parse attachment columns
