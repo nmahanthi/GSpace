@@ -1,0 +1,343 @@
+**********************
+PowerShell transcript start
+Start time: 20260617233248
+Username: RBAMOUSER\sxdumitd
+RunAs User: RBAMOUSER\sxdumitd
+Configuration Name: 
+Machine: RBAMV893203 (Microsoft Windows NT 10.0.20348.0)
+Host Application: C:\Program Files\PowerShell\7\pwsh.dll -noexit -command Set-Location -literalPath 'D:\Google\GAM-Roche'
+Process ID: 6744
+PSVersion: 7.5.0
+PSEdition: Core
+GitCommitId: 7.5.0
+OS: Microsoft Windows 10.0.20348
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.3
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+Transcript started, output file is C:\Logs\ChatAttachmentsLog_20260617_233248.txt
+============================================================
+  Google Chat Attachment Audit (GAM7 Hybrid)
+============================================================
+Admin       : sxdumitd@rochepoc.com
+Mode        : TargetUsers
+Window      : Last 90 days
+Include DMs : True
+Large flag  : > 10 MB
+Timestamp   : 20260617_233248
+
+[1/3] Building space list  (mode: TargetUsers)...
+   Target users loaded : 6
+  [  1/6] sxdumitd@rochepoc.com
+Getting all Chat Spaces for sxdumitd@rochepoc.com
+
+Got 11 Chat Spaces for sxdumitd@rochepoc.com...
+
+  [  2/6] dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Spaces for dan_marius.dumitrescu@rochepoc.com
+
+Got 9 Chat Spaces for dan_marius.dumitrescu@rochepoc.com...
+
+  [  3/6] M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Spaces for m365_chat.high_volume_space@rochepoc.com
+
+Got 6 Chat Spaces for m365_chat.high_volume_space@rochepoc.com...
+
+  [  4/6] M365_chat.direct_messages@rochepoc.com
+Getting all Chat Spaces for m365_chat.direct_messages@rochepoc.com
+
+Got 7 Chat Spaces for m365_chat.direct_messages@rochepoc.com...
+
+  [  5/6] M365_chat.attachments@rochepoc.com
+Getting all Chat Spaces for m365_chat.attachments@rochepoc.com
+
+Got 6 Chat Spaces for m365_chat.attachments@rochepoc.com...
+
+  [  6/6] M365_chat.installed_bots@rochepoc.com
+Getting all Chat Spaces for m365_chat.installed_bots@rochepoc.com
+
+Got 7 Chat Spaces for m365_chat.installed_bots@rochepoc.com...
+
+
+   Unique spaces to scan : 45  (SPACE:5  GROUP_CHAT:0  DM:40)
+
+[2/3] Pulling messages with attachments per space...
+  [  1/45] spaces/_i5xuSAAAAE (DIRECT_MESSAGE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/_i5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/_i5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [  2/45] spaces/_qOUyCAAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/_qOUyCAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/_qOUyCAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [  3/45] spaces/-yZAXSAAAAE (DIRECT_MESSAGE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/-yZAXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/-yZAXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [  4/45] spaces/29o7tSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/29o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/29o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [  5/45] spaces/36mbeSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/36mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/36mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [  6/45] spaces/3i5xuSAAAAE (DIRECT_MESSAGE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/3i5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/3i5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [  7/45] spaces/3wIhuSAAAAE (DIRECT_MESSAGE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/3wIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/3wIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [  8/45] spaces/4wcHHSAAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/4wcHHSAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/4wcHHSAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [  9/45] spaces/5nlkU8AAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/5nlkU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/5nlkU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 10/45] spaces/6MqLXSAAAAE (DIRECT_MESSAGE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/6MqLXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/6MqLXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [ 11/45] spaces/8_areSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/8_areSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/8_areSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 12/45] spaces/9hWCK8AAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/9hWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/9hWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 13/45] [TEST] External Space (SPACE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/AAQA6ry_Mnk, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/AAQA6ry_Mnk, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 14/45] space_for_testing (SPACE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/AAQAHPl2EPQ, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 9 Chat Messages that matched query (Chat Space: spaces/AAQAHPl2EPQ, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 15/45] hey tehre (SPACE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/AAQAKYmIwcI, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/AAQAKYmIwcI, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 16/45] 500plusMessagesTest (SPACE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/AAQAKzOH6lk, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/AAQAKzOH6lk, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [ 17/45] Google Core Test space (SPACE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/AAQAwb6ME_o, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/AAQAwb6ME_o, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [ 18/45] spaces/ic7YXSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/ic7YXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/ic7YXSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 19/45] spaces/iZRbeSAAAAE (DIRECT_MESSAGE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/iZRbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/iZRbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [ 20/45] spaces/jhWCK8AAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/jhWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/jhWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 21/45] spaces/kKQreSAAAAE (DIRECT_MESSAGE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/kKQreSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/kKQreSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [ 22/45] spaces/kxvPyyAAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/kxvPyyAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/kxvPyyAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 23/45] spaces/lnlkU8AAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/lnlkU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/lnlkU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 24/45] spaces/m9o7tSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/m9o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/m9o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 25/45] spaces/mw5DU8AAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/mw5DU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/mw5DU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 26/45] spaces/n-bpdSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/n-bpdSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/n-bpdSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 27/45] spaces/n6mbeSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/n6mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/n6mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 28/45] spaces/n9-ZdSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/n9-ZdSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/n9-ZdSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 29/45] spaces/nvureSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/nvureSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/nvureSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 30/45] spaces/nwIhuSAAAAE (DIRECT_MESSAGE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/nwIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/nwIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [ 31/45] spaces/o0oYXSAAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/o0oYXSAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/o0oYXSAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 32/45] spaces/ocjmxSAAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/ocjmxSAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 3 Chat Messages that matched query (Chat Space: spaces/ocjmxSAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 33/45] spaces/qOYDVyAAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/qOYDVyAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/qOYDVyAAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 34/45] spaces/s218K8AAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/s218K8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/s218K8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+  [ 35/45] spaces/tlVdSCAAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/tlVdSCAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/tlVdSCAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 36/45] spaces/tud4uCAAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/tud4uCAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/tud4uCAAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 37/45] spaces/u9o7tSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/u9o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/u9o7tSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 38/45] spaces/v0VWU8AAAAE (DIRECT_MESSAGE) as sxdumitd@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/v0VWU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/v0VWU8AAAAE, createTime > "2026-03-19T22:33:06Z") for sxdumitd@rochepoc.com...
+
+  [ 39/45] spaces/v6mbeSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/v6mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/v6mbeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 40/45] spaces/vi5xuSAAAAE (DIRECT_MESSAGE) as M365_chat.attachments@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/vi5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/vi5xuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.attachments@rochepoc.com...
+
+  [ 41/45] spaces/vOsldSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/vOsldSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/vOsldSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 42/45] spaces/vwIhuSAAAAE (DIRECT_MESSAGE) as M365_chat.high_volume_space@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/vwIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/vwIhuSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.high_volume_space@rochepoc.com...
+
+  [ 43/45] spaces/y-83HSAAAAE (DIRECT_MESSAGE) as M365_chat.installed_bots@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/y-83HSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/y-83HSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.installed_bots@rochepoc.com...
+
+  [ 44/45] spaces/yIybeSAAAAE (DIRECT_MESSAGE) as M365_chat.direct_messages@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/yIybeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/yIybeSAAAAE, createTime > "2026-03-19T22:33:06Z") for m365_chat.direct_messages@rochepoc.com...
+
+  [ 45/45] spaces/zhWCK8AAAAE (DIRECT_MESSAGE) as dan_marius.dumitrescu@rochepoc.com
+Getting all Chat Messages that match query (Chat Space: spaces/zhWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com
+
+Got 0 Chat Messages that matched query (Chat Space: spaces/zhWCK8AAAAE, createTime > "2026-03-19T22:33:06Z") for dan_marius.dumitrescu@rochepoc.com...
+
+
+   Total attachment detail rows : 4
+   Drive-source attachments     : 2
+   Uploaded/inline attachments  : 2
+
+[3a/3] Enriching Drive attachment sizes...
+   Unique Drive file IDs to query : 2
+   Batch 1/1 (2 IDs)
+Command: D:\Google\GAM-Roche\gam.exe redirect csv D:\Google\GAM-Roche\tmp_drive_20260617_233248_0.csv user sxdumitd@rochepoc.com print filelist query "id = '1y1aAqMjl74i-QyiznqSt7XrFZ9C5-TuBX_KubtAGYno' or id = '1BIUrDElKeicEj3WDY5CVPNLukRxbtCfoteKorpajs2U'" fields "id,name,size,mimetype,owners" allfields >>>false<<<
+
+ERROR: Invalid argument
+Help: Syntax in file D:\Google\GAM-Roche\GamCommands.txt
+Help: Documentation is at https://github.com/GAM-team/GAM/wiki
+   Drive sizes resolved : 0 / 2
+   Not accessible (Shared Drive / permission) : 2
+
+[3b/3] Sizing uploaded/inline attachments via HEAD requests...
+   HEAD succeeded : 0
+   HEAD failed    : 2
+
+Exporting reports...
+   Detail CSV       -> D:\Google\GAM-Roche\CHAT_ATTACH_DETAIL_20260617_233248.csv
+   Per-Space CSV    -> D:\Google\GAM-Roche\CHAT_ATTACH_PER_SPACE_20260617_233248.csv
+   Top Largest CSV  -> D:\Google\GAM-Roche\CHAT_ATTACH_TOP_LARGEST_20260617_233248.csv
+
+============================================================
+              ATTACHMENT AUDIT COMPLETE
+============================================================
+Spaces scanned          : 45
+Spaces with attachments : 2
+Total attachments found : 4
+  Drive-source          : 2
+  Uploaded/inline       : 2
+  Flagged large (>10 MB): 0
+
+Total size (Drive)      : 0.00 MB
+Total size (Uploaded)   : 0.00 MB
+Grand total sized       : 0.00 MB
+
+TOP 5 LARGEST ATTACHMENTS:
+
+Reports:
+  Detail     -> D:\Google\GAM-Roche\CHAT_ATTACH_DETAIL_20260617_233248.csv
+  Per-Space  -> D:\Google\GAM-Roche\CHAT_ATTACH_PER_SPACE_20260617_233248.csv
+  Top 100    -> D:\Google\GAM-Roche\CHAT_ATTACH_TOP_LARGEST_20260617_233248.csv
+============================================================
+
+--- Execution complete in 3.27717868666667 minutes ---
+**********************
+PowerShell transcript end
+End time: 20260617233605
+**********************
