@@ -22,11 +22,18 @@
 #   .\Get-ChatAttachments.ps1 -User john@domain.com -Days 30 -LargeMB 5
 #
 # PARAMETERS
-#   -User       One or more email addresses.  Overrides Mode -> TargetUsers.
-#   -Mode       AllUsers | TargetUsers | AdminOnly  (default: AllUsers)
-#   -Days       How many days back to scan messages (default: 90)
-#   -LargeMB    Flag threshold in MB for "large" attachments (default: 10)
-#   -NoDMs      Switch: skip Direct Message spaces
+#   -User           One or more email addresses.  Overrides Mode -> TargetUsers.
+#   -Mode           AllUsers | TargetUsers | AdminOnly  (default: AllUsers)
+#   -Days           How many days back to scan messages (default: 90)
+#   -LargeMB        Flag threshold in MB for "large" attachments (default: 10)
+#   -NoDMs          Switch: skip Direct Message spaces
+#   -MetadataOnly   Switch: size uploaded files via Drive metadata ONLY.
+#                   Chat-uploaded files live in the sender's Drive "Chat Files"
+#                   folder; we find them by name+type without touching the
+#                   attachment download URL at all.  If a file is not found in
+#                   Drive (rare), size stays 0 rather than doing a Range GET.
+#                   Omit this flag to allow a 1-byte Range GET fallback for
+#                   files that aren't found via Drive search.
 # =============================================================================
 [CmdletBinding()]
 param(
@@ -35,7 +42,8 @@ param(
     [string]   $Mode,
     [int]      $Days,
     [int]      $LargeMB,
-    [switch]   $NoDMs
+    [switch]   $NoDMs,
+    [switch]   $MetadataOnly
 )
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
@@ -69,10 +77,11 @@ if ($User -and $User.Count -gt 0) {
 } else {
     $InlineTargetUsers = $null
 }
-if ($Mode)    { $RunMode        = $Mode    }
-if ($Days)    { $TimeWindowDays = $Days    }
-if ($LargeMB) { $LargeFileMB   = $LargeMB }
-if ($NoDMs)   { $IncludeDMs    = $false   }
+if ($Mode)         { $RunMode        = $Mode    }
+if ($Days)         { $TimeWindowDays = $Days    }
+if ($LargeMB)      { $LargeFileMB   = $LargeMB }
+if ($NoDMs)        { $IncludeDMs    = $false   }
+if ($MetadataOnly) { $UseMetadataOnly = $true  } else { $UseMetadataOnly = $false }
 
 # ── EXISTING ADMIN SPACE LIST (for AllUsers / AdminOnly modes) ─────────────────
 # chat_spaces_target.csv from the BOT/CHAT run gives User + name + spaceType.
@@ -96,6 +105,7 @@ if ($InlineTargetUsers) {
 }
 Write-Host "Window      : Last $TimeWindowDays days"
 Write-Host "Include DMs : $IncludeDMs"
+Write-Host "Sizing mode : $(if($UseMetadataOnly){'MetadataOnly (Drive search, no Range GET)'}else{'Drive search + Range GET fallback'})"
 Write-Host "Large flag  : > $LargeFileMB MB"
 Write-Host "Timestamp   : $Timestamp"
 Write-Host ""
@@ -442,46 +452,53 @@ Write-Host "[3a/3] Enriching Drive attachment sizes..." -ForegroundColor Yellow
 
 if ($driveIds.Count -gt 0) {
     # De-duplicate Drive IDs (same file may be shared in multiple spaces)
-    $uniqueDriveIds = $driveIds | Select-Object -ExpandProperty DriveFileID -Unique
+    $uniqueDriveIds = @($driveIds | Select-Object -ExpandProperty DriveFileID -Unique)
     Write-Host "   Unique Drive file IDs to query : $($uniqueDriveIds.Count)"
 
     $driveSizeMap = @{}   # fileId -> bytes
 
-    $batchSize = 50
-    $batches   = [Math]::Ceiling($uniqueDriveIds.Count / $batchSize)
+    # NOTE: Drive files.list 'q' does NOT support 'id = X' as a searchable field.
+    # Use 'print filelist select drivefileid <id>' (maps to files.get) per file.
+    $tmpDriveCsv = Join-Path $OutputDir "tmp_driveinfo_$Timestamp.csv"
+    $fi = 0
+    foreach ($id in $uniqueDriveIds) {
+        $fi++
+        if ($fi % 10 -eq 0 -or $fi -eq 1) {
+            Write-Host ("   Drive lookup {0}/{1}..." -f $fi, $uniqueDriveIds.Count) -ForegroundColor DarkGray
+        }
+        if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force }
 
-    for ($b = 0; $b -lt $batches; $b++) {
-        $slice = $uniqueDriveIds | Select-Object -Skip ($b * $batchSize) -First $batchSize
-        Write-Host ("   Batch {0}/{1} ({2} IDs)" -f ($b+1), $batches, $slice.Count) -ForegroundColor DarkGray
-
-        $tmpDriveCsv = Join-Path $OutputDir "tmp_drive_$Timestamp`_$b.csv"
-
-        # Build a parentId query using id: clauses joined by OR
-        # GAM filelist query supports: id = 'X' or id = 'Y' ...
-        $idQuery = ($slice | ForEach-Object { "id = '$_'" }) -join " or "
-
-        $gamDriveArgs = @(
-            "redirect", "csv", $tmpDriveCsv,
-            "user",     $AdminEmail,
-            "print",    "filelist",
-            "query",    $idQuery,
-            "fields",   "id,name,size,mimetype,owners",
-            "allfields", "false"
-        )
-        & $GamPath @gamDriveArgs 2>$null
-
-        if (Test-Path $tmpDriveCsv) {
-            $driveRows = Import-Csv $tmpDriveCsv
-            foreach ($dr in $driveRows) {
-                $fid   = Get-Col $dr "id"
-                $bytes = [long]0
-                $raw   = Get-Col $dr "size"
-                if ($raw -match '^\d+$') { $bytes = [long]$raw }
-                if ($fid) { $driveSizeMap[$fid] = $bytes }
+        # Try admin first, then fall back to the space runner who shared the file
+        $runnersToTry = @($AdminEmail)
+        $refEntry = $driveIds | Where-Object { $_.DriveFileID -eq $id } | Select-Object -First 1
+        if ($refEntry -and $refEntry.Row.SenderID) {
+            # SenderID is users/XXX; runner is stored in spacemap via SpaceID
+            $spaceRunner = if ($spacemap.ContainsKey($refEntry.Row.SpaceID)) {
+                $spacemap[$refEntry.Row.SpaceID].Runner } else { $null }
+            if ($spaceRunner -and $spaceRunner -ne $AdminEmail) {
+                $runnersToTry += $spaceRunner
             }
-            Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue
+        }
+
+        foreach ($runner in $runnersToTry) {
+            & $GamPath redirect csv $tmpDriveCsv user $runner print filelist `
+                select drivefileid $id fields "id,name,size,mimetype" 2>$null
+            if (Test-Path $tmpDriveCsv) {
+                $fileRows = @(Import-Csv $tmpDriveCsv)
+                foreach ($dr in $fileRows) {
+                    $fid  = Get-Col $dr "id","Owner.id"
+                    if (-not $fid) { $fid = $id }   # fallback if column name differs
+                    $bytes = [long]0
+                    $raw   = Get-Col $dr "size"
+                    if ($raw -match '^\d+$') { $bytes = [long]$raw }
+                    $driveSizeMap[$fid] = $bytes
+                }
+                Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue
+            }
+            if ($driveSizeMap.ContainsKey($id)) { break }  # found - no need to try next runner
         }
     }
+    if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue }
 
     # Write sizes back to detail rows
     $notFound = 0
@@ -508,61 +525,153 @@ if ($driveIds.Count -gt 0) {
 }
 
 # =============================================================================
-# PHASE 3b – Size uploaded/inline attachments via HTTP HEAD -> Content-Length
+# PHASE 3b – Size uploaded/inline attachments
+#
+# HOW SIZE IS OBTAINED (no full file download in either path):
+#
+#   Stage i  — Drive metadata search  (zero bytes from attachment URL)
+#     Chat-uploaded files are stored in the sender's Google Drive under the
+#     "Chat Files" folder.  We search by filename + MIME type and read the
+#     Drive 'size' field — pure API metadata, nothing downloaded.
+#
+#   Stage ii — Range GET fallback  (1 byte in memory, never saved to disk)
+#     For files not found via Drive search (e.g. already deleted from Drive,
+#     or name collision).  "GET Range: bytes=0-0" triggers HTTP 206 +
+#     Content-Range: bytes 0-0/<total> from which we extract the real size.
+#     Pass -MetadataOnly to skip this stage entirely.
 # =============================================================================
 Write-Host ""
-Write-Host "[3b/3] Sizing uploaded/inline attachments via HEAD requests..." -ForegroundColor Yellow
+Write-Host "[3b/3] Sizing uploaded/inline attachments..." -ForegroundColor Yellow
 
-$headDone = 0; $headFailed = 0; $headSkipped = 0
+$driveDone = 0; $headDone = 0; $headFailed = 0; $headSkipped = 0
 
 if ($uploadedRows.Count -gt 0) {
-    $toHead = $uploadedRows
-    if ($toHead.Count -gt $MaxHeadRequests) {
-        Write-Host ("   Capping HEAD requests at {0} (of {1} total) to avoid rate-limit" `
-            -f $MaxHeadRequests, $toHead.Count) -ForegroundColor DarkYellow
-        $toHead = $toHead | Select-Object -First $MaxHeadRequests
+    $toProcess = $uploadedRows
+    if ($toProcess.Count -gt $MaxHeadRequests) {
+        Write-Host ("   Capping at {0} (of {1} total) to avoid rate-limit" `
+            -f $MaxHeadRequests, $toProcess.Count) -ForegroundColor DarkYellow
+        $toProcess = $toProcess | Select-Object -First $MaxHeadRequests
         $headSkipped = $uploadedRows.Count - $MaxHeadRequests
     }
 
-    # Use a single HttpClient for efficiency (faster than Invoke-WebRequest per call)
-    Add-Type -AssemblyName System.Net.Http
-    $handler = [System.Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $true
-    $client  = [System.Net.Http.HttpClient]::new($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds($HeadTimeoutSec)
+    # ── Stage i: Drive metadata search ──────────────────────────────────────
+    Write-Host "   Stage i : Drive metadata search (no download)..." -ForegroundColor DarkGray
 
-    $hi = 0
-    foreach ($entry in $toHead) {
-        $hi++
-        if ($hi % 50 -eq 0) {
-            Write-Host ("   HEAD {0}/{1}..." -f $hi, $toHead.Count) -ForegroundColor DarkGray
+    $tmpSearch   = Join-Path $OutputDir "tmp_uploadsearch_$Timestamp.csv"
+    $needRangeGet = [System.Collections.Generic.List[object]]::new()
+
+    foreach ($entry in $toProcess) {
+        $fname  = $entry.Row.AttachName
+        $ftype  = $entry.Row.ContentType
+        $runner = if ($spacemap.ContainsKey($entry.Row.SpaceID)) {
+                      $spacemap[$entry.Row.SpaceID].Runner } else { $AdminEmail }
+
+        if (-not $fname -or -not $ftype) { $needRangeGet.Add($entry); continue }
+
+        # Drive query: name + MIME type match, not trashed.
+        # Escape single quotes for Drive query syntax ( ' -> \' )
+        $safeName  = $fname -replace "'", "\'"
+        $safeType  = $ftype -replace "'", "\'"
+        $driveQuery = "name = '$safeName' and mimeType = '$safeType' and trashed = false"
+
+        if (Test-Path $tmpSearch) { Remove-Item $tmpSearch -Force }
+        & $GamPath redirect csv $tmpSearch user $runner print filelist `
+            query $driveQuery fields "id,name,size,mimetype,createdTime" 2>$null
+
+        $matched = $false
+        if (Test-Path $tmpSearch) {
+            $hits = @(Import-Csv $tmpSearch)
+            Remove-Item $tmpSearch -Force -ErrorAction SilentlyContinue
+
+            if ($hits.Count -ge 1) {
+                # If multiple name+type matches pick the one closest to message time
+                $best = if ($hits.Count -eq 1) { $hits[0] } else {
+                    $msgTime = try { [datetime]$entry.Row.CreateTime } catch { [datetime]::UtcNow }
+                    $hits | Sort-Object {
+                        $ct = try { [datetime](Get-Col $_ "createdTime") } catch { [datetime]::MinValue }
+                        [Math]::Abs(($ct - $msgTime).TotalSeconds)
+                    } | Select-Object -First 1
+                }
+                $raw = Get-Col $best "size"
+                if ($raw -match '^\d+$') {
+                    $bytes = [long]$raw
+                    $entry.Row.Bytes   = $bytes
+                    $entry.Row.SizeMB  = [Math]::Round($bytes / 1MB, 2)
+                    $entry.Row.IsLarge = ($bytes -gt ($LargeFileMB * 1MB))
+                    $entry.Row.Note    = "Size via Drive metadata"
+                    $driveDone++
+                    $matched = $true
+                }
+            }
         }
-        try {
-            $req = [System.Net.Http.HttpRequestMessage]::new(
-                        [System.Net.Http.HttpMethod]::Head, $entry.Uri)
-            $resp = $client.SendAsync($req).GetAwaiter().GetResult()
-            $cl   = $resp.Content.Headers.ContentLength
-            if ($cl -and $cl -gt 0) {
-                $bytes = [long]$cl
-                $entry.Row.Bytes   = $bytes
-                $entry.Row.SizeMB  = [Math]::Round($bytes / 1MB, 2)
-                $entry.Row.IsLarge = ($bytes -gt ($LargeFileMB * 1MB))
-                $headDone++
-            } else {
-                $entry.Row.Note = "HEAD: no Content-Length header"
+        if (-not $matched) { $needRangeGet.Add($entry) }
+    }
+    if (Test-Path $tmpSearch) { Remove-Item $tmpSearch -Force -ErrorAction SilentlyContinue }
+    Write-Host ("   Drive search resolved : {0} / {1}" -f $driveDone, $toProcess.Count) `
+        -ForegroundColor Green
+
+    # ── Stage ii: Range GET fallback (skip when -MetadataOnly) ──────────────
+    if ($needRangeGet.Count -gt 0 -and -not $UseMetadataOnly) {
+        Write-Host ("   Stage ii: Range GET fallback for {0} file(s) not found in Drive..." `
+            -f $needRangeGet.Count) -ForegroundColor DarkGray
+
+        Add-Type -AssemblyName System.Net.Http
+        $handler = [System.Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $true
+        $client  = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds($HeadTimeoutSec)
+
+        foreach ($entry in $needRangeGet) {
+            try {
+                $req = [System.Net.Http.HttpRequestMessage]::new(
+                            [System.Net.Http.HttpMethod]::Get, $entry.Uri)
+                $req.Headers.TryAddWithoutValidation("Range", "bytes=0-0") | Out-Null
+                $resp = $client.SendAsync($req,
+                            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+
+                $bytes = [long]0
+                if ([int]$resp.StatusCode -eq 206) {
+                    $cr = $resp.Content.Headers.ContentRange
+                    if ($cr -ne $null -and $cr.Length.HasValue) { $bytes = [long]$cr.Length.Value }
+                }
+                if ($bytes -eq 0) {
+                    $cl = $resp.Content.Headers.ContentLength
+                    if ($cl -and $cl -gt 0) { $bytes = [long]$cl }
+                }
+                # Discard the at-most-1-byte body to free the connection
+                try { $resp.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult() | Out-Null } catch {}
+                $resp.Dispose()
+
+                if ($bytes -gt 0) {
+                    $entry.Row.Bytes   = $bytes
+                    $entry.Row.SizeMB  = [Math]::Round($bytes / 1MB, 2)
+                    $entry.Row.IsLarge = ($bytes -gt ($LargeFileMB * 1MB))
+                    $entry.Row.Note    = "Size via Range GET"
+                    $headDone++
+                } else {
+                    $entry.Row.Note = "Size unknown: no Content-Range/Length from Range GET"
+                    $headFailed++
+                }
+            } catch {
+                $entry.Row.Note = "Range GET failed: $($_.Exception.Message -replace '`n',' ')"
                 $headFailed++
             }
-        } catch {
-            $entry.Row.Note = "HEAD failed: $($_.Exception.Message -replace '`n',' ')"
-            $headFailed++
+        }
+        $client.Dispose()
+
+        Write-Host ("   Range GET resolved  : {0}  failed : {1}" -f $headDone, $headFailed) `
+            -ForegroundColor $(if($headFailed -gt 0){"DarkYellow"}else{"Green"})
+
+    } elseif ($needRangeGet.Count -gt 0 -and $UseMetadataOnly) {
+        Write-Host ("   {0} file(s) not found in Drive - size stays 0 (-MetadataOnly is set)." `
+            -f $needRangeGet.Count) -ForegroundColor DarkYellow
+        foreach ($entry in $needRangeGet) {
+            $entry.Row.Note = "Size unknown: not found in Drive (MetadataOnly mode)"
         }
     }
-    $client.Dispose()
 
-    Write-Host "   HEAD succeeded : $headDone"   -ForegroundColor Green
-    Write-Host "   HEAD failed    : $headFailed"  -ForegroundColor $(if($headFailed -gt 0){"DarkYellow"}else{"Green"})
     if ($headSkipped -gt 0) {
-        Write-Host "   HEAD skipped (cap) : $headSkipped - re-run with higher MaxHeadRequests" -ForegroundColor DarkYellow
+        Write-Host "   Skipped (cap) : $headSkipped - re-run with higher MaxHeadRequests" -ForegroundColor DarkYellow
     }
 } else {
     Write-Host "   No uploaded attachments found - skipping." -ForegroundColor DarkGray
@@ -591,7 +700,10 @@ $perSpaceRows = $detailRows |
         $uploadBytes   = ($grp | Where-Object { $_.Source -eq "UPLOADED_CONTENT" } | Measure-Object Bytes -Sum).Sum
         $driveCount    = ($grp | Where-Object { $_.Source -eq "DRIVE_FILE" }).Count
         $uploadCount   = ($grp | Where-Object { $_.Source -eq "UPLOADED_CONTENT" }).Count
-        $imageCount    = ($grp | Where-Object { $_.IsInlineImage -eq $true -and $_.Source -eq "UPLOADED_CONTENT" }).Count
+        # Image count + bytes: all images regardless of source (uploaded PNG/JPG/GIF + Drive images)
+        $imageRows     = $grp | Where-Object { $_.IsInlineImage -eq $true }
+        $imageCount    = $imageRows.Count
+        $imageBytes    = ($imageRows | Measure-Object Bytes -Sum).Sum
         $gifCount      = ($detailRows | Where-Object { $_.SpaceID -eq $first.SpaceID -and $_.Source -eq "GIPHY_TENOR" } |
                           Select-Object -ExpandProperty Note | ForEach-Object {
                               if ($_ -match "^(\d+) gif") { [int]$Matches[1] } else { 0 }
@@ -608,7 +720,9 @@ $perSpaceRows = $detailRows |
             TotalAttachmentCount     = $grp.Count
             Drive_AttachCount        = $driveCount
             Uploaded_AttachCount     = $uploadCount
-            InlineImage_Count        = $imageCount
+            Image_Count              = $imageCount
+            Image_TotalBytes         = $imageBytes
+            Image_TotalMB            = [Math]::Round($imageBytes / 1MB, 2)
             AnimatedGif_Count        = [int]$gifCount
             TotalBytes               = $totalBytes
             TotalSizeMB              = [Math]::Round($totalBytes / 1MB, 2)
@@ -643,6 +757,9 @@ $grandTotalBytes  = ($detailRows | Measure-Object Bytes -Sum).Sum
 $grandTotalCount  = ($detailRows | Where-Object { $_.Source -ne "GIPHY_TENOR" }).Count
 $driveTotal       = ($detailRows | Where-Object { $_.Source -eq "DRIVE_FILE"       } | Measure-Object Bytes -Sum).Sum
 $uploadTotal      = ($detailRows | Where-Object { $_.Source -eq "UPLOADED_CONTENT" } | Measure-Object Bytes -Sum).Sum
+$imageRows_all    = $detailRows  | Where-Object { $_.IsInlineImage -eq $true -and $_.Source -ne "GIPHY_TENOR" }
+$imageTotal       = ($imageRows_all | Measure-Object Bytes -Sum).Sum
+$imageTotalCount  = $imageRows_all.Count
 $largeTotal       = ($detailRows | Where-Object { $_.IsLarge -eq $true }).Count
 $spacesWithAttach = ($detailRows | Select-Object -ExpandProperty SpaceID -Unique).Count
 $top5             = $detailRows | Where-Object { $_.Bytes -gt 0 } | Sort-Object Bytes -Descending | Select-Object -First 5
@@ -656,11 +773,17 @@ Write-Host ("Spaces with attachments : {0}"   -f $spacesWithAttach)
 Write-Host ("Total attachments found : {0}"   -f $grandTotalCount)
 Write-Host ("  Drive-source          : {0}"   -f ($driveIds.Count))
 Write-Host ("  Uploaded/inline       : {0}"   -f ($uploadedRows.Count))
+Write-Host ("  Images (inline/Drive) : {0}"   -f $imageTotalCount)
 Write-Host ("  Flagged large (>{0} MB): {1}"  -f $LargeFileMB, $largeTotal) `
     -ForegroundColor $(if($largeTotal -gt 0){"Yellow"}else{"Green"})
 Write-Host ""
 Write-Host ("Total size (Drive)      : {0:N2} MB"  -f ($driveTotal  / 1MB))
 Write-Host ("Total size (Uploaded)   : {0:N2} MB"  -f ($uploadTotal / 1MB))
+Write-Host ("  Sized via Drive meta  : {0}"         -f $driveDone)
+if (-not $UseMetadataOnly) {
+Write-Host ("  Sized via Range GET   : {0}"         -f $headDone) }
+Write-Host ("Total size (Images)     : {0:N2} MB"  -f ($imageTotal  / 1MB)) `
+    -ForegroundColor $(if($imageTotal -gt 0){"Cyan"}else{"Gray"})
 Write-Host ("Grand total sized       : {0:N2} MB"  -f ($grandTotalBytes / 1MB))
 Write-Host ""
 Write-Host "TOP 5 LARGEST ATTACHMENTS:" -ForegroundColor Cyan
