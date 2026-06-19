@@ -43,7 +43,9 @@ param(
     [int]      $Days,
     [int]      $LargeMB,
     [switch]   $NoDMs,
-    [switch]   $MetadataOnly
+    [switch]   $MetadataOnly,
+    [int]      $Throttle,      # parallel workers per phase (default 5; requires PS7+)
+    [int]      $MaxDMUsers     # cap DM-user scan in AllUsers mode; 0 = no cap
 )
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
@@ -57,6 +59,8 @@ $IncludeGroupChats   = $true      # include GROUP_CHAT spaces
 $IncludeDMs          = $true      # include Direct Message spaces (needs per-user calls)
 $HeadTimeoutSec      = 10         # timeout per HEAD request for upload sizing
 $MaxHeadRequests     = 500        # cap to avoid rate-limit on large tenants
+$ThrottleLimit       = 5          # parallel workers (Phase 1 DM, Phase 2, Phase 3a) – PS7+ only
+$MaxDMUsersCount     = 0          # 0 = scan every user for DMs; set > 0 to cap (AllUsers mode)
 
 # ── RUN MODE ──────────────────────────────────────────────────────────────────
 #   AllUsers    : all named Spaces (asadmin) + every user's DMs (per-user)
@@ -82,6 +86,15 @@ if ($Days)         { $TimeWindowDays = $Days    }
 if ($LargeMB)      { $LargeFileMB   = $LargeMB }
 if ($NoDMs)        { $IncludeDMs    = $false   }
 if ($MetadataOnly) { $UseMetadataOnly = $true  } else { $UseMetadataOnly = $false }
+if ($Throttle)     { $ThrottleLimit   = $Throttle   }
+if ($PSBoundParameters.ContainsKey('MaxDMUsers')) { $MaxDMUsersCount = $MaxDMUsers }
+
+# Detect PowerShell version — ForEach-Object -Parallel requires PS 7+
+$RunParallel = ($PSVersionTable.PSVersion.Major -ge 7)
+if (-not $RunParallel) {
+    Write-Warning "PS7+ required for parallel speedup. Running sequentially. Upgrade: winget install Microsoft.PowerShell"
+    $ThrottleLimit = 1
+}
 
 # ── EXISTING ADMIN SPACE LIST (for AllUsers / AdminOnly modes) ─────────────────
 # chat_spaces_target.csv from the BOT/CHAT run gives User + name + spaceType.
@@ -107,6 +120,10 @@ Write-Host "Window      : Last $TimeWindowDays days"
 Write-Host "Include DMs : $IncludeDMs"
 Write-Host "Sizing mode : $(if($UseMetadataOnly){'MetadataOnly (Drive search, no Range GET)'}else{'Drive search + Range GET fallback'})"
 Write-Host "Large flag  : > $LargeFileMB MB"
+Write-Host "Parallel    : $(if($RunParallel){"PS7 - ThrottleLimit $ThrottleLimit  (-Throttle N to change)"}else{"PS5 - sequential"})"
+if ($MaxDMUsersCount -gt 0) {
+    Write-Host "DM user cap : $MaxDMUsersCount users max (-MaxDMUsers 0 to disable cap)" -ForegroundColor DarkYellow
+}
 Write-Host "Timestamp   : $Timestamp"
 Write-Host ""
 
@@ -131,6 +148,15 @@ function Get-Col($row, [string[]]$names) {
     }
     return ""
 }
+
+# Capture Get-Col source so it can be injected into parallel runspaces via Invoke-Expression
+$GetColSrc = @'
+function Get-Col { param($row, [string[]]$names)
+    foreach ($n in $names) {
+        $v = $row.PSObject.Properties[$n]
+        if ($v -and "$($v.Value)".Trim() -ne "") { return "$($v.Value)".Trim() }
+    }; return "" }
+'@
 
 # ── HELPER: pull chatspaces for a single user, return rows ────────────────────
 function Get-UserSpaces($userEmail, [string[]]$types) {
@@ -254,17 +280,73 @@ switch ($RunMode) {
             Remove-Item $tmpUsers -Force -ErrorAction SilentlyContinue
             Write-Host "   Users found : $($allUsers.Count)"
 
-            $ui = 0
-            foreach ($u in $allUsers) {
-                $ui++
-                if ($ui % 25 -eq 0) {
-                    Write-Host ("   DM scan: {0}/{1} users processed ({2} DMs so far)" `
-                        -f $ui, $allUsers.Count, `
-                        ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count) `
-                        -ForegroundColor DarkGray
+            # Cap DM scan if requested (AllUsers with 100k users can take hours without a cap)
+            $dmUserList = if ($MaxDMUsersCount -gt 0 -and $allUsers.Count -gt $MaxDMUsersCount) {
+                Write-Host ("   Capping DM scan to {0} of {1} users  (raise with -MaxDMUsers N)" `
+                    -f $MaxDMUsersCount, $allUsers.Count) -ForegroundColor DarkYellow
+                @($allUsers | Select-Object -First $MaxDMUsersCount)
+            } else { $allUsers }
+
+            Write-Host ("   Scanning DMs for {0} users  (parallel={1}, workers={2})..." `
+                -f $dmUserList.Count, $RunParallel, $ThrottleLimit) -ForegroundColor DarkGray
+
+            if ($RunParallel) {
+                # Each worker pulls DM spaces for one user and outputs flat hashtables
+                $dmRaw = $dmUserList | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+                    Invoke-Expression $using:GetColSrc
+                    $u       = $_
+                    $gamPath = $using:GamPath
+                    $outDir  = $using:OutputDir
+                    $tmp = Join-Path $outDir "tmp_dm_$(New-Guid).csv"
+                    & $gamPath redirect csv $tmp user $u print chatspaces types directmessage `
+                        fields "name,displayname,spacetype,membershipcount,createtime,lastactivetime,spaceuri" 2>$null
+                    if (Test-Path $tmp) {
+                        $rows = @(Import-Csv $tmp)
+                        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+                        foreach ($r in $rows) {
+                            @{
+                                name            = Get-Col $r "name"
+                                displayname     = Get-Col $r "displayName","displayname"
+                                spacetype       = Get-Col $r "spaceType","spacetype"
+                                membershipcount = Get-Col $r "membershipCount.joinedDirectHumanUserCount","membershipcount"
+                                spaceuri        = Get-Col $r "spaceUri","spaceuri"
+                                createtime      = Get-Col $r "createTime","createtime"
+                                lastactivetime  = Get-Col $r "lastActiveTime","lastactivetime"
+                                Runner          = $u
+                            }
+                        }
+                    }
                 }
-                $dmRows = Get-UserSpaces $u @("directmessage")
-                Add-ToSpaceMap $dmRows $u
+                # Merge into spacemap on the main thread (safe to mutate here)
+                foreach ($ht in @($dmRaw)) {
+                    if (-not $ht -or -not $ht.name) { continue }
+                    $sn = "$($ht.name)".Trim()
+                    if (-not $sn -or $spacemap.ContainsKey($sn)) { continue }
+                    if ("DIRECT_MESSAGE" -notin $allowedTypes) { continue }
+                    $spacemap[$sn] = [ordered]@{
+                        Runner      = $ht.Runner
+                        DisplayName = $ht.displayname
+                        SpaceType   = "DIRECT_MESSAGE"
+                        MemberCount = $ht.membershipcount
+                        SpaceUri    = $ht.spaceuri
+                        CreateTime  = $ht.createtime
+                        LastActive  = $ht.lastactivetime
+                    }
+                }
+            } else {
+                # PS5 sequential fallback
+                $ui = 0
+                foreach ($u in $dmUserList) {
+                    $ui++
+                    if ($ui % 25 -eq 0) {
+                        Write-Host ("   DM scan: {0}/{1} users ({2} DMs so far)" `
+                            -f $ui, $dmUserList.Count, `
+                            ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count) `
+                            -ForegroundColor DarkGray
+                    }
+                    $dmRows = Get-UserSpaces $u @("directmessage")
+                    Add-ToSpaceMap $dmRows $u
+                }
             }
             Write-Host ("   DM spaces added : {0}" `
                 -f ($spacemap.Values | Where-Object { $_.SpaceType -eq "DIRECT_MESSAGE" }).Count) `
@@ -280,12 +362,60 @@ switch ($RunMode) {
         $typeArgs = [System.Collections.Generic.List[string]]@("space","groupchat")
         if ($IncludeDMs) { $typeArgs.Add("directmessage") }
 
-        $ti = 0
-        foreach ($u in $targetUsers) {
-            $ti++
-            Write-Host ("  [{0,3}/{1}] {2}" -f $ti, $targetUsers.Count, $u) -ForegroundColor DarkCyan
-            $rows = Get-UserSpaces $u $typeArgs
-            Add-ToSpaceMap $rows $u
+        Write-Host ("   Pulling spaces for {0} target user(s)  (parallel={1}, workers={2})..." `
+            -f $targetUsers.Count, $RunParallel, $ThrottleLimit) -ForegroundColor DarkGray
+
+        if ($RunParallel) {
+            $typeArgStr = $typeArgs -join ","
+            $tuRaw = $targetUsers | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+                Invoke-Expression $using:GetColSrc
+                $u          = $_
+                $gamPath    = $using:GamPath
+                $outDir     = $using:OutputDir
+                $typeStr    = $using:typeArgStr
+                $tmp = Join-Path $outDir "tmp_tu_$(New-Guid).csv"
+                & $gamPath redirect csv $tmp user $u print chatspaces types $typeStr `
+                    fields "name,displayname,spacetype,membershipcount,createtime,lastactivetime,spaceuri" 2>$null
+                if (Test-Path $tmp) {
+                    $rows = @(Import-Csv $tmp)
+                    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+                    foreach ($r in $rows) {
+                        @{
+                            name            = Get-Col $r "name"
+                            displayname     = Get-Col $r "displayName","displayname"
+                            spacetype       = (Get-Col $r "spaceType","spacetype").ToUpper()
+                            membershipcount = Get-Col $r "membershipCount.joinedDirectHumanUserCount","membershipcount"
+                            spaceuri        = Get-Col $r "spaceUri","spaceuri"
+                            createtime      = Get-Col $r "createTime","createtime"
+                            lastactivetime  = Get-Col $r "lastActiveTime","lastactivetime"
+                            Runner          = $u
+                        }
+                    }
+                }
+            }
+            foreach ($ht in @($tuRaw)) {
+                if (-not $ht -or -not $ht.name) { continue }
+                $sn = "$($ht.name)".Trim()
+                if (-not $sn -or $spacemap.ContainsKey($sn)) { continue }
+                if ($ht.spacetype -notin $allowedTypes) { continue }
+                $spacemap[$sn] = [ordered]@{
+                    Runner      = $ht.Runner
+                    DisplayName = $ht.displayname
+                    SpaceType   = $ht.spacetype
+                    MemberCount = $ht.membershipcount
+                    SpaceUri    = $ht.spaceuri
+                    CreateTime  = $ht.createtime
+                    LastActive  = $ht.lastactivetime
+                }
+            }
+        } else {
+            $ti = 0
+            foreach ($u in $targetUsers) {
+                $ti++
+                Write-Host ("  [{0,3}/{1}] {2}" -f $ti, $targetUsers.Count, $u) -ForegroundColor DarkCyan
+                $rows = Get-UserSpaces $u $typeArgs
+                Add-ToSpaceMap $rows $u
+            }
         }
     }
 
@@ -309,133 +439,203 @@ Write-Host ("   Unique spaces to scan : {0}  (SPACE:{1}  GROUP_CHAT:{2}  DM:{3})
 # PHASE 2 – Per-space: pull messages, parse attachment columns
 # =============================================================================
 Write-Host ""
-Write-Host "[2/3] Pulling messages with attachments per space..." -ForegroundColor Yellow
+Write-Host ("[2/3] Pulling messages per space  (parallel={0}, workers={1})..." `
+    -f $RunParallel, $ThrottleLimit) -ForegroundColor Yellow
 
 # Time filter: ISO-8601, UTC
-$filterTime  = (Get-Date).AddDays(-$TimeWindowDays).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-$msgFilter   = "createTime > `"$filterTime`""
+$filterTime = (Get-Date).AddDays(-$TimeWindowDays).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$msgFilter  = "createTime > `"$filterTime`""
 
-$detailRows  = [System.Collections.Generic.List[PSCustomObject]]::new()
-$driveIds    = [System.Collections.Generic.List[PSCustomObject]]::new()   # for Phase 3a
-$uploadedRows= [System.Collections.Generic.List[PSCustomObject]]::new()   # for Phase 3b
-
-$spaceIdx = 0
-foreach ($sname in $uniqueSpaces) {
-    $spaceIdx++
-    $meta   = $spacemap[$sname]
-    $runner = $meta.Runner
-    $disp   = if ($meta.DisplayName) { $meta.DisplayName } else { $sname }
-
-    Write-Host ("  [{0,3}/{1}] {2} ({3}) as {4}" -f `
-        $spaceIdx, $uniqueSpaces.Count, $disp, $meta.SpaceType, $runner) -ForegroundColor DarkCyan
-
-    # Remove stale temp file
-    if (Test-Path $TmpMsgCsv) { Remove-Item $TmpMsgCsv -Force }
-
-    # GAM: print chatmessages — no formatjson so GAM flattens attachment.N.* columns
-    $gamArgs = @(
-        "redirect", "csv", $TmpMsgCsv,
-        "user",     $runner,
-        "print",    "chatmessages", $sname,
-        "filter",   $msgFilter,
-        "fields",   "name,createtime,sender,attachment,attachedgifs"
-    )
-    & $GamPath @gamArgs 2>$null
-
-    if (-not (Test-Path $TmpMsgCsv) -or (Get-Item $TmpMsgCsv).Length -lt 10) {
-        Write-Host "      (no messages or access denied)" -ForegroundColor DarkGray
-        continue
-    }
-
-    $msgs = Import-Csv $TmpMsgCsv
-    if (-not $msgs -or $msgs.Count -eq 0) { continue }
-
-    # Find all attachment index slots present in this batch (0,1,2,...)
-    $sampleCols = $msgs[0].PSObject.Properties.Name
-    $attachIdxs = $sampleCols |
-        Where-Object { $_ -match '^attachment\.(\d+)\.' } |
-        ForEach-Object { [int]($_ -replace '^attachment\.(\d+)\..*','$1') } |
-        Sort-Object -Unique
-
-    foreach ($msg in $msgs) {
-        $msgName    = Get-Col $msg "name"
-        $createTime = Get-Col $msg "createTime","createtime"
-        $sender     = Get-Col $msg "sender.name","sender.email","sender"
-        $senderDisp = Get-Col $msg "sender.displayName","sender.displayname"
-
-        # ── Attached Gifs (count only, no byte size available) ───────────────
-        $gifCols = $msg.PSObject.Properties.Name | Where-Object { $_ -match '^attachedGifs\.' }
-        $gifCount = ($gifCols | ForEach-Object { $_ -replace '^attachedGifs\.(\d+)\..*','$1' } |
-                     Sort-Object -Unique).Count
-
-        if ($gifCount -gt 0) {
-            $detailRows.Add([PSCustomObject]@{
-                SpaceID        = $sname
-                SpaceName      = $disp
-                SpaceType      = $meta.SpaceType
-                MemberCount    = $meta.MemberCount
-                MessageID      = $msgName
-                CreateTime     = $createTime
-                Sender         = $senderDisp
-                SenderID       = $sender
-                AttachIndex    = "gifs"
-                AttachName     = "Animated GIF(s)"
-                ContentType    = "image/gif"
-                Source         = "GIPHY_TENOR"
-                IsInlineImage  = $true
-                DriveFileID    = ""
-                DownloadUri    = ""
-                Bytes          = 0
-                SizeMB         = 0
-                IsLarge        = $false
-                Note           = "$gifCount gif(s) - URL only, no size"
-            })
+# ── PARALLEL PATH (PS7+) ──────────────────────────────────────────────────────
+if ($RunParallel) {
+    # Snapshot all work items before entering parallel (avoids $using: on a live hashtable)
+    $spaceWork = @($uniqueSpaces | ForEach-Object {
+        $meta = $spacemap[$_]
+        [PSCustomObject]@{
+            SpaceName   = $_
+            Runner      = $meta.Runner
+            DisplayName = if ($meta.DisplayName) { $meta.DisplayName } else { $_ }
+            SpaceType   = $meta.SpaceType
+            MemberCount = $meta.MemberCount
         }
+    })
 
-        # ── File attachments ─────────────────────────────────────────────────
-        foreach ($idx in $attachIdxs) {
-            $prefix      = "attachment.$idx"
-            $aName       = Get-Col $msg "$prefix.name"
-            if (-not $aName) { continue }   # slot empty for this message
+    # Each worker pulls one space and emits flat hashtables — one per attachment
+    $phase2Rows = $spaceWork | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+        Invoke-Expression $using:GetColSrc
 
-            $contentName = Get-Col $msg "$prefix.contentName"
-            $contentType = Get-Col $msg "$prefix.contentType"
-            $source      = Get-Col $msg "$prefix.source"
-            $driveId     = Get-Col $msg "$prefix.driveDataRef.driveFileId"
-            $dlUri       = Get-Col $msg "$prefix.downloadUri"
-            $isImage     = $contentType -match "^image/"
+        $item      = $_
+        $gamPath   = $using:GamPath
+        $outDir    = $using:OutputDir
+        $flt       = $using:msgFilter
 
-            $detRow = [PSCustomObject]@{
-                SpaceID        = $sname
-                SpaceName      = $disp
-                SpaceType      = $meta.SpaceType
-                MemberCount    = $meta.MemberCount
-                MessageID      = $msgName
-                CreateTime     = $createTime
-                Sender         = $senderDisp
-                SenderID       = $sender
-                AttachIndex    = $idx
-                AttachName     = $contentName
-                ContentType    = $contentType
-                Source         = $source
-                IsInlineImage  = $isImage
-                DriveFileID    = $driveId
-                DownloadUri    = $dlUri
-                Bytes          = 0           # filled in Phase 3
-                SizeMB         = 0
-                IsLarge        = $false
-                Note           = ""
+        $tmpFile = Join-Path $outDir "tmp_p2_$(New-Guid).csv"
+        $gArgs   = @("redirect","csv",$tmpFile,"user",$item.Runner,"print","chatmessages",
+                     $item.SpaceName,"filter",$flt,"fields",
+                     "name,createtime,sender,attachment,attachedgifs")
+        & $gamPath @gArgs 2>$null
+
+        if (-not (Test-Path $tmpFile) -or (Get-Item $tmpFile).Length -lt 10) { return }
+        $msgs = @(Import-Csv $tmpFile)
+        Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
+        if (-not $msgs -or $msgs.Count -eq 0) { return }
+
+        $sampleCols = $msgs[0].PSObject.Properties.Name
+        $attachIdxs = $sampleCols |
+            Where-Object { $_ -match '^attachment\.(\d+)\.' } |
+            ForEach-Object { [int]($_ -replace '^attachment\.(\d+)\..*','$1') } |
+            Sort-Object -Unique
+
+        foreach ($msg in $msgs) {
+            $msgName    = Get-Col $msg "name"
+            $createTime = Get-Col $msg "createTime","createtime"
+            $sender     = Get-Col $msg "sender.name","sender.email","sender"
+            $senderDisp = Get-Col $msg "sender.displayName","sender.displayname"
+
+            $gifCols  = $msg.PSObject.Properties.Name | Where-Object { $_ -match '^attachedGifs\.' }
+            $gifCount = ($gifCols | ForEach-Object { $_ -replace '^attachedGifs\.(\d+)\..*','$1' } |
+                         Sort-Object -Unique).Count
+            if ($gifCount -gt 0) {
+                @{  SpaceID="$($item.SpaceName)"; SpaceName="$($item.DisplayName)"
+                    SpaceType="$($item.SpaceType)"; MemberCount="$($item.MemberCount)"
+                    MessageID="$msgName"; CreateTime="$createTime"
+                    Sender="$senderDisp"; SenderID="$sender"
+                    AttachIndex="gifs"; AttachName="Animated GIF(s)"
+                    ContentType="image/gif"; Source="GIPHY_TENOR"
+                    IsInlineImage=$true; DriveFileID=""; DownloadUri=""
+                    Bytes=0; SizeMB=0; IsLarge=$false
+                    Note="$gifCount gif(s) - URL only, no size" }
             }
-            $detailRows.Add($detRow)
 
-            if ($source -eq "DRIVE_FILE" -and $driveId) {
-                $driveIds.Add([PSCustomObject]@{ DriveFileID = $driveId; Row = $detRow })
-            } elseif ($source -eq "UPLOADED_CONTENT" -and $dlUri) {
-                $uploadedRows.Add([PSCustomObject]@{ Uri = $dlUri; Row = $detRow })
+            foreach ($idx in $attachIdxs) {
+                $prefix  = "attachment.$idx"
+                $aName   = Get-Col $msg "$prefix.name"
+                if (-not $aName) { continue }
+
+                $cName   = Get-Col $msg "$prefix.contentName"
+                $cType   = Get-Col $msg "$prefix.contentType"
+                $src     = Get-Col $msg "$prefix.source"
+                $driveId = Get-Col $msg "$prefix.driveDataRef.driveFileId"
+                $dlUri   = Get-Col $msg "$prefix.downloadUri"
+                $isImg   = $cType -match "^image/"
+
+                @{  SpaceID="$($item.SpaceName)"; SpaceName="$($item.DisplayName)"
+                    SpaceType="$($item.SpaceType)"; MemberCount="$($item.MemberCount)"
+                    MessageID="$msgName"; CreateTime="$createTime"
+                    Sender="$senderDisp"; SenderID="$sender"
+                    AttachIndex=$idx; AttachName="$cName"
+                    ContentType="$cType"; Source="$src"
+                    IsInlineImage=$isImg; DriveFileID="$driveId"
+                    DownloadUri="$dlUri"; Bytes=0; SizeMB=0; IsLarge=$false; Note="" }
             }
         }
     }
-    Remove-Item $TmpMsgCsv -Force -ErrorAction SilentlyContinue
+
+    # Collect flat hashtables into typed lists (main thread preserves mutable references for Phase 3)
+    $detailRows   = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $driveIds     = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $uploadedRows = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    foreach ($ht in @($phase2Rows)) {
+        if (-not $ht) { continue }
+        $row = [PSCustomObject]$ht
+        $detailRows.Add($row)
+        if ($ht.Source -eq "DRIVE_FILE" -and $ht.DriveFileID) {
+            $driveIds.Add([PSCustomObject]@{ DriveFileID = $ht.DriveFileID; Row = $row })
+        } elseif ($ht.Source -eq "UPLOADED_CONTENT" -and $ht.DownloadUri) {
+            $uploadedRows.Add([PSCustomObject]@{ Uri = $ht.DownloadUri; Row = $row })
+        }
+    }
+
+} else {
+    # ── SEQUENTIAL FALLBACK (PS5) ─────────────────────────────────────────────
+    $detailRows   = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $driveIds     = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $uploadedRows = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    $spaceIdx = 0
+    foreach ($sname in $uniqueSpaces) {
+        $spaceIdx++
+        $meta   = $spacemap[$sname]
+        $runner = $meta.Runner
+        $disp   = if ($meta.DisplayName) { $meta.DisplayName } else { $sname }
+
+        Write-Host ("  [{0,3}/{1}] {2} ({3}) as {4}" -f `
+            $spaceIdx, $uniqueSpaces.Count, $disp, $meta.SpaceType, $runner) -ForegroundColor DarkCyan
+
+        if (Test-Path $TmpMsgCsv) { Remove-Item $TmpMsgCsv -Force }
+        $gamArgs = @(
+            "redirect","csv",$TmpMsgCsv,"user",$runner,
+            "print","chatmessages",$sname,"filter",$msgFilter,
+            "fields","name,createtime,sender,attachment,attachedgifs"
+        )
+        & $GamPath @gamArgs 2>$null
+
+        if (-not (Test-Path $TmpMsgCsv) -or (Get-Item $TmpMsgCsv).Length -lt 10) {
+            Write-Host "      (no messages or access denied)" -ForegroundColor DarkGray
+            continue
+        }
+        $msgs = Import-Csv $TmpMsgCsv
+        if (-not $msgs -or $msgs.Count -eq 0) { continue }
+
+        $sampleCols = $msgs[0].PSObject.Properties.Name
+        $attachIdxs = $sampleCols |
+            Where-Object { $_ -match '^attachment\.(\d+)\.' } |
+            ForEach-Object { [int]($_ -replace '^attachment\.(\d+)\..*','$1') } |
+            Sort-Object -Unique
+
+        foreach ($msg in $msgs) {
+            $msgName    = Get-Col $msg "name"
+            $createTime = Get-Col $msg "createTime","createtime"
+            $sender     = Get-Col $msg "sender.name","sender.email","sender"
+            $senderDisp = Get-Col $msg "sender.displayName","sender.displayname"
+
+            $gifCols  = $msg.PSObject.Properties.Name | Where-Object { $_ -match '^attachedGifs\.' }
+            $gifCount = ($gifCols | ForEach-Object { $_ -replace '^attachedGifs\.(\d+)\..*','$1' } |
+                         Sort-Object -Unique).Count
+            if ($gifCount -gt 0) {
+                $detailRows.Add([PSCustomObject]@{
+                    SpaceID="$sname"; SpaceName="$disp"; SpaceType=$meta.SpaceType
+                    MemberCount=$meta.MemberCount; MessageID=$msgName; CreateTime=$createTime
+                    Sender=$senderDisp; SenderID=$sender; AttachIndex="gifs"
+                    AttachName="Animated GIF(s)"; ContentType="image/gif"; Source="GIPHY_TENOR"
+                    IsInlineImage=$true; DriveFileID=""; DownloadUri=""
+                    Bytes=0; SizeMB=0; IsLarge=$false
+                    Note="$gifCount gif(s) - URL only, no size"
+                })
+            }
+
+            foreach ($idx in $attachIdxs) {
+                $prefix      = "attachment.$idx"
+                $aName       = Get-Col $msg "$prefix.name"
+                if (-not $aName) { continue }
+
+                $contentName = Get-Col $msg "$prefix.contentName"
+                $contentType = Get-Col $msg "$prefix.contentType"
+                $source      = Get-Col $msg "$prefix.source"
+                $driveId     = Get-Col $msg "$prefix.driveDataRef.driveFileId"
+                $dlUri       = Get-Col $msg "$prefix.downloadUri"
+                $isImage     = $contentType -match "^image/"
+
+                $detRow = [PSCustomObject]@{
+                    SpaceID=$sname; SpaceName=$disp; SpaceType=$meta.SpaceType
+                    MemberCount=$meta.MemberCount; MessageID=$msgName; CreateTime=$createTime
+                    Sender=$senderDisp; SenderID=$sender; AttachIndex=$idx
+                    AttachName=$contentName; ContentType=$contentType; Source=$source
+                    IsInlineImage=$isImage; DriveFileID=$driveId; DownloadUri=$dlUri
+                    Bytes=0; SizeMB=0; IsLarge=$false; Note=""
+                }
+                $detailRows.Add($detRow)
+
+                if ($source -eq "DRIVE_FILE" -and $driveId) {
+                    $driveIds.Add([PSCustomObject]@{ DriveFileID = $driveId; Row = $detRow })
+                } elseif ($source -eq "UPLOADED_CONTENT" -and $dlUri) {
+                    $uploadedRows.Add([PSCustomObject]@{ Uri = $dlUri; Row = $detRow })
+                }
+            }
+        }
+        Remove-Item $TmpMsgCsv -Force -ErrorAction SilentlyContinue
+    }
 }
 
 Write-Host ""
@@ -445,62 +645,98 @@ Write-Host "   Uploaded/inline attachments  : $($uploadedRows.Count)"
 
 # =============================================================================
 # PHASE 3a – Enrich Drive-source attachments with real byte size
-#            gam user admin show fileinfo <id> fields id,name,size,mimetype
+#            gam user <runner> print filelist select drivefileid <id> fields size
 # =============================================================================
 Write-Host ""
-Write-Host "[3a/3] Enriching Drive attachment sizes..." -ForegroundColor Yellow
+Write-Host ("[3a/3] Enriching Drive attachment sizes  (parallel={0}, workers={1})..." `
+    -f $RunParallel, $ThrottleLimit) -ForegroundColor Yellow
 
 if ($driveIds.Count -gt 0) {
-    # De-duplicate Drive IDs (same file may be shared in multiple spaces)
     $uniqueDriveIds = @($driveIds | Select-Object -ExpandProperty DriveFileID -Unique)
     Write-Host "   Unique Drive file IDs to query : $($uniqueDriveIds.Count)"
 
     $driveSizeMap = @{}   # fileId -> bytes
 
-    # NOTE: Drive files.list 'q' does NOT support 'id = X' as a searchable field.
-    # Use 'print filelist select drivefileid <id>' (maps to files.get) per file.
-    $tmpDriveCsv = Join-Path $OutputDir "tmp_driveinfo_$Timestamp.csv"
-    $fi = 0
-    foreach ($id in $uniqueDriveIds) {
-        $fi++
-        if ($fi % 10 -eq 0 -or $fi -eq 1) {
-            Write-Host ("   Drive lookup {0}/{1}..." -f $fi, $uniqueDriveIds.Count) -ForegroundColor DarkGray
+    # Pre-compute the best runner per file ID (admin first, then space runner as fallback)
+    $driveWork = @($uniqueDriveIds | ForEach-Object {
+        $id       = $_
+        $ref      = $driveIds | Where-Object { $_.DriveFileID -eq $id } | Select-Object -First 1
+        $fbRunner = $AdminEmail
+        if ($ref -and $ref.Row.SpaceID -and $spacemap.ContainsKey($ref.Row.SpaceID)) {
+            $sr = $spacemap[$ref.Row.SpaceID].Runner
+            if ($sr -and $sr -ne $AdminEmail) { $fbRunner = $sr }
         }
-        if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force }
+        [PSCustomObject]@{ Id = $id; AdminEmail = $AdminEmail; FallbackRunner = $fbRunner }
+    })
 
-        # Try admin first, then fall back to the space runner who shared the file
-        $runnersToTry = @($AdminEmail)
-        $refEntry = $driveIds | Where-Object { $_.DriveFileID -eq $id } | Select-Object -First 1
-        if ($refEntry -and $refEntry.Row.SenderID) {
-            # SenderID is users/XXX; runner is stored in spacemap via SpaceID
-            $spaceRunner = if ($spacemap.ContainsKey($refEntry.Row.SpaceID)) {
-                $spacemap[$refEntry.Row.SpaceID].Runner } else { $null }
-            if ($spaceRunner -and $spaceRunner -ne $AdminEmail) {
-                $runnersToTry += $spaceRunner
-            }
-        }
+    if ($RunParallel) {
+        # ── Parallel: each worker fetches one file ID and returns @{Id;Bytes}
+        $driveResults = $driveWork | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+            $item    = $_
+            $gamPath = $using:GamPath
+            $outDir  = $using:OutputDir
 
-        foreach ($runner in $runnersToTry) {
-            & $GamPath redirect csv $tmpDriveCsv user $runner print filelist `
-                select drivefileid $id fields "id,name,size,mimetype" 2>$null
-            if (Test-Path $tmpDriveCsv) {
-                $fileRows = @(Import-Csv $tmpDriveCsv)
-                foreach ($dr in $fileRows) {
-                    $fid  = Get-Col $dr "id","Owner.id"
-                    if (-not $fid) { $fid = $id }   # fallback if column name differs
-                    $bytes = [long]0
-                    $raw   = Get-Col $dr "size"
-                    if ($raw -match '^\d+$') { $bytes = [long]$raw }
-                    $driveSizeMap[$fid] = $bytes
+            $bytes = [long]0
+            $runnersToTry = @($item.AdminEmail)
+            if ($item.FallbackRunner -ne $item.AdminEmail) { $runnersToTry += $item.FallbackRunner }
+
+            foreach ($runner in $runnersToTry) {
+                $tmpF = Join-Path $outDir "tmp_drv_$(New-Guid).csv"
+                & $gamPath redirect csv $tmpF user $runner print filelist `
+                    select drivefileid $item.Id fields "id,name,size,mimetype" 2>$null
+                if (Test-Path $tmpF) {
+                    $rows = @(Import-Csv $tmpF)
+                    Remove-Item $tmpF -Force -ErrorAction SilentlyContinue
+                    foreach ($r in $rows) {
+                        $rawProp = $r.PSObject.Properties['size']
+                        if ($rawProp -and $rawProp.Value -match '^\d+$') {
+                            $bytes = [long]$rawProp.Value; break
+                        }
+                    }
                 }
-                Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue
+                if ($bytes -gt 0) { break }
             }
-            if ($driveSizeMap.ContainsKey($id)) { break }  # found - no need to try next runner
+            [PSCustomObject]@{ Id = $item.Id; Bytes = $bytes }
         }
-    }
-    if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue }
 
-    # Write sizes back to detail rows
+        foreach ($r in @($driveResults)) {
+            if ($r) { $driveSizeMap[$r.Id] = $r.Bytes }
+        }
+
+    } else {
+        # ── Sequential fallback (PS5) ─────────────────────────────────────────
+        $tmpDriveCsv = Join-Path $OutputDir "tmp_driveinfo_$Timestamp.csv"
+        $fi = 0
+        foreach ($item in $driveWork) {
+            $fi++
+            if ($fi % 10 -eq 0 -or $fi -eq 1) {
+                Write-Host ("   Drive lookup {0}/{1}..." -f $fi, $driveWork.Count) -ForegroundColor DarkGray
+            }
+            if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force }
+
+            $runnersToTry = @($item.AdminEmail)
+            if ($item.FallbackRunner -ne $item.AdminEmail) { $runnersToTry += $item.FallbackRunner }
+
+            foreach ($runner in $runnersToTry) {
+                & $GamPath redirect csv $tmpDriveCsv user $runner print filelist `
+                    select drivefileid $item.Id fields "id,name,size,mimetype" 2>$null
+                if (Test-Path $tmpDriveCsv) {
+                    $fileRows = @(Import-Csv $tmpDriveCsv)
+                    foreach ($dr in $fileRows) {
+                        $fid  = Get-Col $dr "id","Owner.id"
+                        if (-not $fid) { $fid = $item.Id }
+                        $raw  = Get-Col $dr "size"
+                        $driveSizeMap[$fid] = if ($raw -match '^\d+$') { [long]$raw } else { [long]0 }
+                    }
+                    Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue
+                }
+                if ($driveSizeMap.ContainsKey($item.Id)) { break }
+            }
+        }
+        if (Test-Path $tmpDriveCsv) { Remove-Item $tmpDriveCsv -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Write sizes back to detail rows (single-threaded — safe mutable access)
     $notFound = 0
     foreach ($entry in $driveIds) {
         $fid = $entry.DriveFileID

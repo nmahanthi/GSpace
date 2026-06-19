@@ -3,23 +3,55 @@
     Runs the enhanced Google Sites embed crawl using Playwright.
 
 .DESCRIPTION
-    Wrapper for 03_crawl_sites_enhanced.js. Ensures auth is fresh, then runs
-    the crawl with shadow-DOM traversal, lazy-load scrolling, and deeper
-    embed detection (data-src, srcdoc, YouTube patterns).
+    Wrapper for 03_crawl_sites_enhanced.js. Ensures auth is fresh, then crawls
+    the selected Google Sites for embedded content (iframes, YouTube, Maps, Drive, etc.)
+    with shadow-DOM traversal, lazy-load scrolling, and subpage BFS navigation.
+
+    Three ways to specify what to crawl (pick one):
+      1. -SitesCsv  — Recommended for bulk runs. Point to a CSV with columns:
+                       SiteUrl (required), SiteName (optional).
+                       Use SelectedSites.csv in this folder as a template.
+      2. -SiteUrl   — Crawl a single site by URL.
+      3. Neither    — Falls back to gam7/output/02_GSites_Inventory_Detailed.csv.
+
+.PARAMETER SitesCsv
+    Path to a CSV file listing the sites to crawl.
+    Required columns : SiteUrl  (the Google Sites URL, editor or published)
+    Optional columns : SiteName (friendly label; defaults to the URL if omitted)
+
+    Example row:
+      https://sites.google.com/d/19JMNQ5.../p/1TQ4yy...,HR Portal
+
+.PARAMETER SiteUrl
+    Crawl a single Google Sites URL instead of a CSV.
+
+.PARAMETER MaxPages
+    Maximum subpages to crawl per site (default: 200).
+    Lower this (e.g. 20) for a quick test run.
 
 .PARAMETER Gam7Path
-    Path to your gam7 folder containing .auth/state.json.
+    Path to your gam7 folder containing node_modules and .auth/state.json.
 
 .PARAMETER DryRun
-    If specified, only validates prerequisites without running.
+    Validates prerequisites and CSV without running the crawl.
 
 .EXAMPLE
-    .\Run-EnhancedCrawl.ps1
+    # Crawl a hand-picked selection of sites
+    .\Run-EnhancedCrawl.ps1 -SitesCsv ".\SelectedSites.csv"
+
+.EXAMPLE
+    # Quick test: crawl one site, limit to 10 pages
+    .\Run-EnhancedCrawl.ps1 -SiteUrl "https://sites.google.com/d/<id>/p/<page>" -MaxPages 10
+
+.EXAMPLE
+    # Validate the CSV and prerequisites without actually crawling
+    .\Run-EnhancedCrawl.ps1 -SitesCsv ".\SelectedSites.csv" -DryRun
 #>
 [CmdletBinding()]
 param(
-    [string]$SiteUrl = "",
+    [string]$SiteUrl  = "",
     [string]$SitesCsv = "",
+    [int]   $MaxPages = 200,
     [string]$Gam7Path = "C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\gam7",
     [switch]$DryRun
 )
@@ -39,11 +71,28 @@ if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
 $crawlTarget = ""
 if ($SiteUrl) {
     $crawlTarget = $SiteUrl
-    Write-Host "Target: Direct site URL -> $SiteUrl" -ForegroundColor Cyan
+    Write-Host "Target: Single site URL -> $SiteUrl" -ForegroundColor Cyan
 }
 elseif ($SitesCsv) {
-    $crawlTarget = $SitesCsv
-    Write-Host "Target: Custom inventory CSV -> $SitesCsv" -ForegroundColor Cyan
+    # Resolve and validate the CSV before handing it to Node
+    if (-not (Test-Path $SitesCsv)) {
+        throw "SitesCsv not found: $SitesCsv"
+    }
+    $csvRows = Import-Csv -Path $SitesCsv
+    if ($csvRows.Count -eq 0) {
+        throw "SitesCsv is empty: $SitesCsv"
+    }
+    if (-not ($csvRows[0].PSObject.Properties.Name -contains 'SiteUrl')) {
+        throw "SitesCsv must have a 'SiteUrl' column. Found: $($csvRows[0].PSObject.Properties.Name -join ', ')"
+    }
+    $validRows = $csvRows | Where-Object { -not [string]::IsNullOrWhiteSpace($_.SiteUrl) }
+    Write-Host "CSV validated: $($validRows.Count) site(s) found in $SitesCsv" -ForegroundColor Green
+    if ($DryRun) {
+        Write-Host "`nSites that would be crawled:" -ForegroundColor Cyan
+        $validRows | Format-Table SiteUrl, SiteName -AutoSize
+    }
+    $crawlTarget = (Resolve-Path $SitesCsv).Path
+    Write-Host "Target: Selected sites CSV -> $crawlTarget" -ForegroundColor Cyan
 }
 else {
     Write-Host "Target: Default inventory (gam7/output/02_GSites_Inventory_Detailed.csv)" -ForegroundColor Cyan
@@ -74,7 +123,7 @@ Write-Host "`n=== Running Enhanced Google Sites Crawl ===" -ForegroundColor Cyan
 $destScript = Join-Path $Gam7Path "03_crawl_sites_enhanced.js"
 Copy-Item -Path $EnhancedScript -Destination $destScript -Force
 Push-Location $Gam7Path
-& node "03_crawl_sites_enhanced.js" $crawlTarget
+& node "03_crawl_sites_enhanced.js" $crawlTarget $MaxPages
 $exitCode = $LASTEXITCODE
 Pop-Location
 
