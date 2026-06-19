@@ -200,17 +200,33 @@ foreach ($pair in $validPairs) {
         $key = $match.FileName
         if (-not $orderTracker.ContainsKey($key)) { $orderTracker[$key] = 0 } else { $orderTracker[$key] += 1 }
 
+        # Map Google Sites column count to SPO section template
+        $cols = if ($row.ColumnsInRow) { [int]$row.ColumnsInRow } else { 1 }
+        $spoSectionTemplate = switch ($cols) {
+            2       { 'TwoColumn'   }
+            3       { 'ThreeColumn' }
+            default { 'OneColumn'   }
+        }
+        $spoColumnIndex = if ($row.ColumnPosition -and [int]$row.ColumnPosition -gt 0) { [int]$row.ColumnPosition } else { 1 }
+        $embedW = if ($row.EmbedWidth  -and [int]$row.EmbedWidth  -gt 0) { [int]$row.EmbedWidth  } else { 600 }
+        $embedH = if ($row.EmbedHeight -and [int]$row.EmbedHeight -gt 0) { [int]$row.EmbedHeight } else { 450 }
+        $align  = if ($row.HorizontalAlign) { $row.HorizontalAlign } else { 'center' }
+
         $mapRow = [pscustomobject]@{
-            SiteName       = $siteName
-            GoogleSiteUrl  = $googleUrl
-            SPOSiteUrl     = $spoUrl
-            PageName       = $match.FileName
-            EmbedUrl       = $row.ArtifactUrl
-            SectionIndex   = 1
-            ColumnIndex    = 1
-            Order          = $orderTracker[$key]
-            GSitePageTitle = $gsTitle
-            ArtifactType   = $row.ArtifactType
+            SiteName        = $siteName
+            GoogleSiteUrl   = $googleUrl
+            SPOSiteUrl      = $spoUrl
+            PageName        = $match.FileName
+            EmbedUrl        = $row.ArtifactUrl
+            SectionIndex    = $orderTracker[$key] + 1   # each embed gets its own section row
+            SectionTemplate = $spoSectionTemplate
+            ColumnIndex     = $spoColumnIndex
+            Order           = 0
+            EmbedWidth      = $embedW
+            EmbedHeight     = $embedH
+            HorizontalAlign = $align
+            GSitePageTitle  = $gsTitle
+            ArtifactType    = $row.ArtifactType
         }
         $siteMapping.Add($mapRow)
         $masterMapping.Add($mapRow)

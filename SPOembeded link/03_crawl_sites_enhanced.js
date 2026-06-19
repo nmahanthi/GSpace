@@ -99,33 +99,115 @@ async function extractLinks(page, baseUrl) {
 async function extractEmbeds(page) {
   return await page.evaluate(() => {
     const results = [];
-    const add = (kind, url, ctx = '') => { if (url) results.push({ kind, url: url.trim(), context: ctx.substring(0, 300) }); };
+
+    // Walk up the DOM crossing shadow-root boundaries.
+    function getParent(node) {
+      if (node.parentElement) return node.parentElement;
+      const root = node.getRootNode();
+      return (root && root.host) ? root.host : null;
+    }
+
+    // Returns true when target's rendered rect falls inside container's rect.
+    // Used instead of .contains() which doesn't cross shadow boundaries.
+    function rectContains(containerRect, targetRect) {
+      return targetRect.left >= containerRect.left - 2 &&
+             targetRect.right  <= containerRect.right  + 2 &&
+             targetRect.top    >= containerRect.top    - 2 &&
+             targetRect.bottom <= containerRect.bottom + 2;
+    }
+
+    // Detect rendered width, height, horizontal alignment and column context
+    // for an embed element by inspecting its bounding rect and parent chain.
+    function getEmbedLayout(el) {
+      const rect = el.getBoundingClientRect();
+      const width  = parseInt(el.getAttribute('width'))  || Math.round(rect.width)  || 600;
+      const height = parseInt(el.getAttribute('height')) || Math.round(rect.height) || 450;
+
+      // If element has no rendered size yet, return safe defaults.
+      if (!rect.width || !rect.height) {
+        return { width, height, align: 'center', columnsInRow: 1, columnIndex: 1 };
+      }
+
+      const pageWidth = window.innerWidth || 1280;
+      let columnsInRow = 1;
+      let columnIndex  = 1;
+
+      // Walk up (max 12 levels, crossing shadow roots) looking for a row
+      // container whose children are laid out side-by-side horizontally.
+      let node = getParent(el);
+      let depth = 0;
+      while (node && node !== document.body && depth < 12) {
+        const children = Array.from(node.children).filter(c => {
+          const r = c.getBoundingClientRect();
+          return r.width > 80 && r.height > 30;
+        });
+        if (children.length > 1) {
+          const tops = children.map(c => c.getBoundingClientRect().top);
+          const minTop = Math.min(...tops);
+          // Consider children on the same horizontal row (within 60 px vertically)
+          const sameLine = children.filter((_, i) => Math.abs(tops[i] - minTop) < 60);
+          if (sameLine.length > 1) {
+            columnsInRow = sameLine.length;
+            // Find which column our embed falls into by rect containment.
+            for (let i = 0; i < sameLine.length; i++) {
+              if (rectContains(sameLine[i].getBoundingClientRect(), rect)) {
+                columnIndex = i + 1;
+                break;
+              }
+            }
+            break;
+          }
+        }
+        node = getParent(node);
+        depth++;
+      }
+
+      // Derive named alignment.
+      let align;
+      if (columnsInRow > 1) {
+        align = columnIndex === 1 ? 'left' : columnIndex === columnsInRow ? 'right' : 'center';
+      } else {
+        // Single-column: use the embed centre's position relative to the viewport.
+        const ratio = (rect.left + rect.width / 2) / pageWidth;
+        align = ratio < 0.38 ? 'left' : ratio > 0.62 ? 'right' : 'center';
+      }
+
+      return { width, height, align, columnsInRow, columnIndex };
+    }
+
+    const add = (kind, url, ctx, layout) => {
+      if (!url) return;
+      const L = layout || { width: 600, height: 450, align: 'center', columnsInRow: 1, columnIndex: 1 };
+      results.push({
+        kind, url: url.trim(), context: ctx.substring(0, 300),
+        width: L.width, height: L.height,
+        align: L.align, columnsInRow: L.columnsInRow, columnIndex: L.columnIndex
+      });
+    };
 
     function scan(root) {
       const iframes = root.querySelectorAll('iframe');
       for (const f of iframes) {
         const src = f.src || f.getAttribute('data-src') || f.getAttribute('srcdoc') || '';
-        if (src) add('iframe', src, f.outerHTML);
+        if (src) add('iframe', src, f.outerHTML, getEmbedLayout(f));
       }
       const embeds = root.querySelectorAll('embed[src], object[data], video[src], audio[src], source[src]');
       for (const e of embeds) {
         const url = e.src || e.getAttribute('data') || e.getAttribute('src') || '';
-        if (url) add(e.tagName.toLowerCase(), url, e.outerHTML);
+        if (url) add(e.tagName.toLowerCase(), url, e.outerHTML, getEmbedLayout(e));
       }
       const dataEls = root.querySelectorAll('[data-url], [data-src], [data-embed-url], [data-href]');
       for (const e of dataEls) {
-        const url = e.getAttribute('data-url') || e.getAttribute('data-src') || e.getAttribute('data-embed-url') || e.getAttribute('data-href') || '';
-        if (url && url.startsWith('http')) add('data-embed', url, e.outerHTML);
+        const url = e.getAttribute('data-url') || e.getAttribute('data-src') ||
+                    e.getAttribute('data-embed-url') || e.getAttribute('data-href') || '';
+        if (url && url.startsWith('http')) add('data-embed', url, e.outerHTML, getEmbedLayout(e));
       }
-      // Search for YouTube patterns in text/HTML
+      // YouTube URL patterns found in raw HTML (no layout context available)
       const html = root.innerHTML || '';
       const ytMatches = html.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtube\.com\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/g);
-      if (ytMatches) ytMatches.forEach(m => add('youtube-pattern', m, ''));
-      // Shadow DOM
-      const all = root.querySelectorAll('*');
-      for (const el of all) {
-        if (el.shadowRoot) scan(el.shadowRoot);
-      }
+      if (ytMatches) ytMatches.forEach(m => add('youtube-pattern', m, '', null));
+      // Recurse into shadow roots
+      root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) scan(el.shadowRoot); });
     }
     scan(document);
     return results;
@@ -217,7 +299,10 @@ async function extractEmbeds(page) {
               embedsOut.push({
                 SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
                 PageUrl: currentUrl, PageTitle: title, Depth: current.depth,
-                ItemKind: item.kind, ArtifactType: type, ArtifactUrl: normalized, ContextHtml: item.context
+                ItemKind: item.kind, ArtifactType: type, ArtifactUrl: normalized, ContextHtml: item.context,
+                EmbedWidth: item.width || 600, EmbedHeight: item.height || 450,
+                HorizontalAlign: item.align || 'center',
+                ColumnsInRow: item.columnsInRow || 1, ColumnPosition: item.columnIndex || 1
               });
             }
 

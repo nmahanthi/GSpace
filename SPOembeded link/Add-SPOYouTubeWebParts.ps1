@@ -74,78 +74,78 @@ catch {
 }
 
 foreach ($row in $Mappings) {
-    $pageName = $row.PageName
-    $embedUrl = $row.EmbedUrl
-    $sectionIndex = if ([string]::IsNullOrWhiteSpace($row.SectionIndex)) { 1 } else { [int]$row.SectionIndex }
-    $columnIndex = if ([string]::IsNullOrWhiteSpace($row.ColumnIndex)) { 1 } else { [int]$row.ColumnIndex }
-    $order = if ([string]::IsNullOrWhiteSpace($row.Order)) { 0 } else { [int]$row.Order }
+    $pageName        = $row.PageName
+    $embedUrl        = $row.EmbedUrl
+    $sectionIndex    = if ([string]::IsNullOrWhiteSpace($row.SectionIndex))    { 1 }        else { [int]$row.SectionIndex }
+    $columnIndex     = if ([string]::IsNullOrWhiteSpace($row.ColumnIndex))     { 1 }        else { [int]$row.ColumnIndex }
+    $order           = if ([string]::IsNullOrWhiteSpace($row.Order))           { 0 }        else { [int]$row.Order }
+    $embedWidth      = if ([string]::IsNullOrWhiteSpace($row.EmbedWidth)  -or [int]$row.EmbedWidth  -le 0) { 600 } else { [int]$row.EmbedWidth }
+    $embedHeight     = if ([string]::IsNullOrWhiteSpace($row.EmbedHeight) -or [int]$row.EmbedHeight -le 0) { 450 } else { [int]$row.EmbedHeight }
+    $hAlign          = if ([string]::IsNullOrWhiteSpace($row.HorizontalAlign)) { 'center' } else { $row.HorizontalAlign.ToLower() }
+    $sectionTemplate = if ([string]::IsNullOrWhiteSpace($row.SectionTemplate)) { 'OneColumn'} else { $row.SectionTemplate }
 
+    # Validate required fields
     if ([string]::IsNullOrWhiteSpace($pageName) -or [string]::IsNullOrWhiteSpace($embedUrl)) {
         Write-Warning "Skipping row with missing PageName or EmbedUrl"
         continue
     }
 
-    # Use ContentEmbed for all embeds with iframe HTML strings.
-    # The ContentEmbed web part expects embedCode to contain a full <iframe> HTML snippet.
-    # Ampersands in HTML attribute values must be escaped as &amp; to avoid embed web part parser errors.
+    # Alignment CSS: centre uses auto margins; left/right uses no margin on the leading side
+    $marginStyle = switch ($hAlign) {
+        'left'  { 'display:block;margin:0;' }
+        'right' { 'display:block;margin:0 0 0 auto;' }
+        default { 'display:block;margin:0 auto;' }   # center
+    }
+
+    # Build the iframe embed code using actual captured dimensions and alignment
     $webPartType = "ContentEmbed"
-    $escapedUrl = $embedUrl -replace '&', '&amp;'
+    $escapedUrl  = $embedUrl -replace '&', '&amp;'
 
     if ($embedUrl -match "youtube\.com|youtu\.be") {
         $videoId = $null
-        if ($embedUrl -match 'v=([a-zA-Z0-9_-]+)') { $videoId = $Matches[1] }
-        elseif ($embedUrl -match 'youtu\.be/([a-zA-Z0-9_-]+)') { $videoId = $Matches[1] }
-        elseif ($embedUrl -match 'embed/([a-zA-Z0-9_-]+)') { $videoId = $Matches[1] }
+        if      ($embedUrl -match 'v=([a-zA-Z0-9_-]+)')          { $videoId = $Matches[1] }
+        elseif  ($embedUrl -match 'youtu\.be/([a-zA-Z0-9_-]+)')  { $videoId = $Matches[1] }
+        elseif  ($embedUrl -match 'embed/([a-zA-Z0-9_-]+)')      { $videoId = $Matches[1] }
 
         if ($videoId) {
-            $embedCode = '<iframe width="560" height="315" src="https://www.youtube.com/embed/' + $videoId + '" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>'
-        }
-        else {
+            $embedCode = '<iframe width="' + $embedWidth + '" height="' + $embedHeight + '" style="' + $marginStyle + '" src="https://www.youtube.com/embed/' + $videoId + '" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>'
+        } else {
             Write-Warning "Could not extract YouTube video ID from $embedUrl; using raw URL in iframe."
-            $embedCode = '<iframe src="' + $escapedUrl + '" width="600" height="450" style="border:0;" allowfullscreen="" loading="lazy"></iframe>'
+            $embedCode = '<iframe src="' + $escapedUrl + '" width="' + $embedWidth + '" height="' + $embedHeight + '" style="' + $marginStyle + 'border:0;" allowfullscreen="" loading="lazy"></iframe>'
         }
-    }
-    else {
-        $embedCode = '<iframe src="' + $escapedUrl + '" width="600" height="450" style="border:0;" allowfullscreen="" loading="lazy"></iframe>'
+    } else {
+        $embedCode = '<iframe src="' + $escapedUrl + '" width="' + $embedWidth + '" height="' + $embedHeight + '" style="' + $marginStyle + 'border:0;" allowfullscreen="" loading="lazy"></iframe>'
     }
 
-    $props = @{ embedCode = $embedCode }
-
-    $action = "Add $webPartType to '$pageName' (Section=$sectionIndex, Column=$columnIndex)"
+    $props  = @{ embedCode = $embedCode }
+    $action = "Add $webPartType to '$pageName' (Section=$sectionIndex Col=$columnIndex Align=$hAlign ${embedWidth}x${embedHeight} Template=$sectionTemplate)"
 
     if ($DryRun) {
-        Write-Host "[DRY RUN] Would $action with URL: $embedUrl" -ForegroundColor Magenta
+        Write-Host "[DRY RUN] $action" -ForegroundColor Magenta
+        Write-Host "          URL: $embedUrl" -ForegroundColor DarkGray
         continue
     }
 
     if ($PSCmdlet.ShouldProcess($pageName, "Add $webPartType web part")) {
         try {
-            $page = Get-PnPPage -Identity $pageName -ErrorAction Stop
-
-            # Determine effective section to use
-            $effectiveSection = $sectionIndex
+            $page       = Get-PnPPage -Identity $pageName -ErrorAction Stop
             $maxSection = ($page.Sections | Measure-Object).Count
 
-            # If target section is beyond current count, append new sections
-            if ($effectiveSection -gt $maxSection) {
-                for ($s = $maxSection + 1; $s -le $effectiveSection; $s++) {
-                    Add-PnPPageSection -Page $page -SectionTemplate OneColumn -ErrorAction SilentlyContinue
-                }
-            }
+            # Always append a new section so each embed gets its own row,
+            # using the template that matches the original Google Sites layout.
+            Add-PnPPageSection -Page $page -SectionTemplate $sectionTemplate -ErrorAction SilentlyContinue
+            $effectiveSection = ($page.Sections | Measure-Object).Count
 
-            # If target section exists and is full-width, append a standard OneColumn section instead
-            if ($effectiveSection -le $maxSection) {
-                $targetSec = $page.Sections[$effectiveSection - 1]
-                if ($targetSec.Type -eq "OneColumnFullWidth") {
-                    Write-Host "Target section $effectiveSection is full-width; appending a new OneColumn section for the embed." -ForegroundColor Yellow
-                    Add-PnPPageSection -Page $page -SectionTemplate OneColumn -ErrorAction SilentlyContinue
-                    $effectiveSection = ($page.Sections | Measure-Object).Count
-                }
+            # Safety: if the new section turned out full-width, replace with OneColumn
+            $newSec = $page.Sections[$effectiveSection - 1]
+            if ($newSec.Type -eq "OneColumnFullWidth") {
+                Write-Host "  Section is full-width; switching to OneColumn for embed." -ForegroundColor Yellow
+                Add-PnPPageSection -Page $page -SectionTemplate OneColumn -ErrorAction SilentlyContinue
+                $effectiveSection = ($page.Sections | Measure-Object).Count
             }
 
             $jsonProps = $props | ConvertTo-Json -Compress
 
-            # Add the web part (retry once if full-width conflict occurs)
             try {
                 Add-PnPPageWebPart -Page $page `
                     -DefaultWebPartType $webPartType `
@@ -156,27 +156,23 @@ foreach ($row in $Mappings) {
             }
             catch {
                 if ($_ -match "one column full width section" -or $_ -match "text controls inside a one column full width") {
-                    Write-Host "Full-width section conflict; appending a new OneColumn section and retrying." -ForegroundColor Yellow
+                    Write-Host "  Full-width conflict on retry; falling back to OneColumn." -ForegroundColor Yellow
                     Add-PnPPageSection -Page $page -SectionTemplate OneColumn -ErrorAction SilentlyContinue
                     $effectiveSection = ($page.Sections | Measure-Object).Count
                     Add-PnPPageWebPart -Page $page `
                         -DefaultWebPartType $webPartType `
                         -WebPartProperties $jsonProps `
                         -Section $effectiveSection `
-                        -Column $columnIndex `
+                        -Column 1 `
                         -Order $order
-                }
-                else {
-                    throw $_
-                }
+                } else { throw $_ }
             }
 
             if ($Publish) {
                 $page.Publish("Published via Add-SPOYouTubeWebParts.ps1")
-                Write-Host "Added $webPartType and published '$pageName'." -ForegroundColor Green
-            }
-            else {
-                Write-Host "Added $webPartType to '$pageName' (not published)." -ForegroundColor Green
+                Write-Host "Added + published $webPartType on '$pageName' ($hAlign, ${embedWidth}x${embedHeight})." -ForegroundColor Green
+            } else {
+                Write-Host "Added $webPartType to '$pageName' ($hAlign, ${embedWidth}x${embedHeight}, $sectionTemplate col $columnIndex)." -ForegroundColor Green
             }
         }
         catch {
