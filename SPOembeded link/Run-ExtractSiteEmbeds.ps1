@@ -3,46 +3,44 @@
     Extracts embedded content (YouTube, Maps, etc.) from a single Google Sites page.
 
 .DESCRIPTION
-    Copies the Playwright extractor into the gam7 folder (where node_modules live),
-    launches a visible browser for sign-in if needed, scrolls the page to trigger
-    lazy-loaded embeds, and saves results to CSV.
+    Uses Playwright to load the page with the saved Google session, scrolls to
+    trigger lazy-loaded embeds, and saves all discovered embed URLs to a CSV.
+
+    Prerequisites (one-time setup in this folder):
+      npm install
+      npx playwright install chromium
+      node Save-GoogleAuth.js   # sign in to Google; re-run if session expires
 
 .PARAMETER SiteUrl
-    The Google Sites URL to inspect (can be /edit or public view).
-
-.PARAMETER Gam7Path
-    Path to your gam7 folder containing Playwright and node_modules.
+    The Google Sites URL to inspect (editor or published view).
 
 .PARAMETER OutputCsv
     Output CSV path. Defaults to ExtractedEmbeds.csv in the current directory.
 
 .EXAMPLE
-    .\Run-ExtractSiteEmbeds.ps1 -SiteUrl "https://sites.google.com/d/19JMNQ5kCG9VAAaWjrW65uH_G5--5r3un/p/1TQ4yy3DBedUJ43SP-ZYz1DubSv50Iu7e/edit"
+    .\Run-ExtractSiteEmbeds.ps1 -SiteUrl "https://sites.google.com/d/19JMNQ5.../p/1TQ4yy.../edit"
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$SiteUrl,
-    [string]$Gam7Path = "C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\gam7",
     [string]$OutputCsv = "ExtractedEmbeds.csv"
 )
 
 $ErrorActionPreference = "Stop"
-$Gam7Path = Resolve-Path $Gam7Path
 $ScriptPath = Join-Path $PSScriptRoot "Extract-SiteEmbeds-Playwright.js"
 
 if (-not (Test-Path $ScriptPath)) {
     throw "Extractor script not found: $ScriptPath"
 }
 if (-not (Get-Command "node" -ErrorAction SilentlyContinue)) {
-    throw "Node.js is required."
+    throw "Node.js is required. Install from https://nodejs.org/"
+}
+if (-not (Test-Path (Join-Path $PSScriptRoot "node_modules"))) {
+    throw "node_modules not found. Run the following in this folder first:`n  npm install`n  npx playwright install chromium"
 }
 
-$dest = Join-Path $Gam7Path "Extract-SiteEmbeds-Playwright.js"
-Copy-Item -Path $ScriptPath -Destination $dest -Force
-
-Push-Location $Gam7Path
+Push-Location $PSScriptRoot
 Write-Host "Extracting embeds from: $SiteUrl" -ForegroundColor Cyan
-Write-Host "A Chromium browser will open. Sign in to Google if prompted, then wait for the script to finish." -ForegroundColor Yellow
 & node "Extract-SiteEmbeds-Playwright.js" "$SiteUrl" "$OutputCsv"
 $exit = $LASTEXITCODE
 Pop-Location

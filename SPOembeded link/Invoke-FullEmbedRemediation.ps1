@@ -2,11 +2,20 @@
 .SYNOPSIS
     End-to-end orchestrator: Google Sites auth/crawl -> extract embeds -> build mapping -> add to SPO.
 
+.DESCRIPTION
+    Runs the full pipeline without any dependency on GAM or external tools.
+    All Node.js scripts run from this folder using local node_modules.
+
+    Prerequisites (one-time setup in this folder):
+      npm install
+      npx playwright install chromium
+
 .PARAMETER SPOUrl
     Target SharePoint Online site URL (e.g. https://tenant.sharepoint.com/sites/mysite).
 
-.PARAMETER Gam7Path
-    Path to your local gam7 folder containing 02_save_playwright_auth.js and 03_crawl_sites.js.
+.PARAMETER SitesCsv
+    Optional CSV of Google Sites to crawl (SiteUrl, SiteName columns).
+    Defaults to SelectedSites.csv in this folder if it exists.
 
 .PARAMETER ClientId
     Azure AD App Registration ClientId for PnP PowerShell auth.
@@ -15,31 +24,33 @@
     Optional tenant name. If omitted, derived from SPO URL.
 
 .PARAMETER SkipGoogleAuth
-    Skip re-running the Google auth step if state.json is already fresh.
+    Skip re-running the Google auth step if .auth\state.json is already fresh.
 
 .PARAMETER SkipCrawl
-    Skip the crawl; use existing gam7/output CSVs.
+    Skip the crawl and use existing output\08_Embeds_Enhanced.csv.
 
 .PARAMETER DryRun
     Preview only; do not write changes to SPO.
 
 .EXAMPLE
-    .\Invoke-FullEmbedRemediation.ps1 -SPOUrl "https://mngenvmcap908272.sharepoint.com/sites/ftcmigrationtestsite"
+    .\Invoke-FullEmbedRemediation.ps1 -SPOUrl "https://contoso.sharepoint.com/sites/migrated" -SitesCsv ".\SelectedSites.csv"
+
+.EXAMPLE
+    .\Invoke-FullEmbedRemediation.ps1 -SPOUrl "https://contoso.sharepoint.com/sites/migrated" -SkipCrawl -DryRun
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$SPOUrl,
-    [string]$Gam7Path = "C:\Users\v-nmahanthi\OneDrive - Microsoft\Documents\gam7",
-    [string]$ClientId = "3834b2e7-ab80-45fc-b4c8-ed5c960076b7",
-    [string]$TenantId = "",
+    [string]$SitesCsv  = "",
+    [string]$ClientId  = "3834b2e7-ab80-45fc-b4c8-ed5c960076b7",
+    [string]$TenantId  = "",
     [switch]$SkipGoogleAuth,
     [switch]$SkipCrawl,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
-$Gam7Path = Resolve-Path $Gam7Path
-$OutputDir = Join-Path $Gam7Path "output"
+$OutputDir  = Join-Path $PSScriptRoot "output"
 $MappingCsv = Join-Path $PSScriptRoot "EmbedMapping.csv"
 
 function Test-Prereq {
@@ -50,21 +61,23 @@ function Test-Prereq {
 Write-Host "`n=== PREREQUISITE CHECKS ===" -ForegroundColor Cyan
 Test-Prereq "node" "Node.js"
 Test-Prereq "npm" "npm"
+if (-not (Test-Path (Join-Path $PSScriptRoot "node_modules"))) {
+    throw "node_modules not found. Run in this folder:`n  npm install`n  npx playwright install chromium"
+}
 if (-not (Get-Module -ListAvailable -Name "PnP.PowerShell")) {
     throw "PnP.PowerShell is required. Install: Install-Module PnP.PowerShell -Force"
 }
 Import-Module PnP.PowerShell
 $spoHost = ([uri]$SPOUrl).Host
 $tenantName = if ($TenantId) { $TenantId } else { ($spoHost -replace "\.sharepoint\.com$","") + ".onmicrosoft.com" }
-Write-Host "SPO: $SPOUrl | Tenant: $tenantName | Gam7: $Gam7Path" -ForegroundColor Green
+Write-Host "SPO: $SPOUrl | Tenant: $tenantName" -ForegroundColor Green
 
 # ── STEP 1: Google Auth ─────────────────────────────────────────────────────
 if (-not $SkipGoogleAuth) {
     Write-Host "`n=== STEP 1: Google Sites Browser Auth ===" -ForegroundColor Cyan
-    Write-Host "A Chromium browser window will open. Sign in to Google with the account that can access the target Sites." -ForegroundColor Yellow
-    Write-Host "After sign-in completes and a site loads, return here and press Enter to save the auth state." -ForegroundColor Yellow
-    Push-Location $Gam7Path
-    & node "02_save_playwright_auth.js"
+    Write-Host "A Chromium browser window will open. Sign in to Google, navigate to one of your Sites, then press Enter." -ForegroundColor Yellow
+    Push-Location $PSScriptRoot
+    & node "Save-GoogleAuth.js"
     if ($LASTEXITCODE -ne 0) { throw "Auth script failed." }
     Pop-Location
     Write-Host "Auth state saved." -ForegroundColor Green
@@ -73,18 +86,26 @@ if (-not $SkipGoogleAuth) {
 # ── STEP 2: Crawl Google Sites ────────────────────────────────────────────
 if (-not $SkipCrawl) {
     Write-Host "`n=== STEP 2: Crawling Google Sites ===" -ForegroundColor Cyan
-    Push-Location $Gam7Path
-    & node "03_crawl_sites.js"
+    # Resolve crawl target: explicit CSV > SelectedSites.csv > default inventory
+    $crawlArg = ""
+    if ($SitesCsv -and (Test-Path $SitesCsv)) {
+        $crawlArg = (Resolve-Path $SitesCsv).Path
+        Write-Host "Using sites CSV: $crawlArg" -ForegroundColor Cyan
+    } elseif (Test-Path (Join-Path $PSScriptRoot "SelectedSites.csv")) {
+        $crawlArg = (Resolve-Path (Join-Path $PSScriptRoot "SelectedSites.csv")).Path
+        Write-Host "Using SelectedSites.csv" -ForegroundColor Cyan
+    }
+    Push-Location $PSScriptRoot
+    & node "03_crawl_sites_enhanced.js" $crawlArg
     if ($LASTEXITCODE -ne 0) { throw "Crawl script failed." }
     Pop-Location
     Write-Host "Crawl complete. Outputs in $OutputDir" -ForegroundColor Green
 }
 
-# ── STEP 3: Extract Embeds from HTML snapshots ────────────────────────────
-Write-Host "`n=== STEP 3: Extracting embeds from crawl snapshots ===" -ForegroundColor Cyan
-$HtmlDir = Join-Path $OutputDir "html"
-$EmbedsCsv = Join-Path $OutputDir "08_Embeds.csv"
-$PagesCsv = Join-Path $OutputDir "07_Pages.csv"
+# ── STEP 3: Load embeds from crawl output ────────────────────────────────
+Write-Host "`n=== STEP 3: Loading embeds from crawl output ===" -ForegroundColor Cyan
+$EmbedsCsv = Join-Path $OutputDir "08_Embeds_Enhanced.csv"
+$PagesCsv  = Join-Path $OutputDir "07_Pages_Enhanced.csv"
 
 if (-not (Test-Path $EmbedsCsv)) { throw "Embeds CSV not found: $EmbedsCsv. Re-run crawl." }
 

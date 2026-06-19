@@ -9,7 +9,7 @@ const outputDir = path.resolve(__dirname, 'output');
 const authFile = path.resolve(__dirname, '.auth', 'state.json');
 const maxPagesPerSite = Number(process.argv[3] || process.env.MAX_PAGES_PER_SITE || 200);
 
-if (!fs.existsSync(authFile)) throw new Error(`Auth file not found: ${authFile}. Run 02_save_playwright_auth.js first.`);
+if (!fs.existsSync(authFile)) throw new Error(`Auth file not found: ${authFile}. Run "node Save-GoogleAuth.js" first to capture a Google session.`);
 
 function readCsv(file) {
   return parse(fs.readFileSync(file, 'utf8'), { columns: true, skip_empty_lines: true });
@@ -164,99 +164,103 @@ async function extractEmbeds(page) {
 
   const pagesOut = [], embedsOut = [], externalDomainsOut = [];
 
-  for (const site of sites) {
-    console.log(`Crawling site: ${site.SiteName} | ${site.SiteUrl}`);
-    const siteScope = buildSiteScope(site.SiteUrl, site.SiteId);
-    const visited = new Set();
-    const queue = [{ url: site.SiteUrl, depth: 0 }];
-    let pageCounter = 0;
+  try {
+    for (const site of sites) {
+      console.log(`Crawling site: ${site.SiteName} | ${site.SiteUrl}`);
+      const siteScope = buildSiteScope(site.SiteUrl, site.SiteId);
+      const visited = new Set();
+      const queue = [{ url: site.SiteUrl, depth: 0 }];
+      let pageCounter = 0;
 
-    while (queue.length > 0 && pageCounter < maxPagesPerSite) {
-      const current = queue.shift();
-      const currentUrl = normalizeUrl(current.url);
-      if (!currentUrl || visited.has(currentUrl)) continue;
-      visited.add(currentUrl);
+      while (queue.length > 0 && pageCounter < maxPagesPerSite) {
+        const current = queue.shift();
+        const currentUrl = normalizeUrl(current.url);
+        if (!currentUrl || visited.has(currentUrl)) continue;
+        visited.add(currentUrl);
 
-      const page = await context.newPage();
-      try {
-        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForLoadState('load', { timeout: 60000 });
-        // Scroll to trigger lazy loading
-        for (let i = 0; i < 5; i++) {
-          await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-          await page.waitForTimeout(1500);
-        }
-        // Wait a bit more for embeds
-        await page.waitForTimeout(3000);
+        const page = await context.newPage();
+        try {
+          await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+          await page.waitForLoadState('load', { timeout: 60000 });
+          // Scroll to trigger lazy loading
+          for (let i = 0; i < 5; i++) {
+            await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+            await page.waitForTimeout(1500);
+          }
+          // Wait a bit more for embeds
+          await page.waitForTimeout(3000);
 
-        const title = await page.title();
-        const html = await page.content();
-        pageCounter += 1;
+          const title = await page.title();
+          const html = await page.content();
+          pageCounter += 1;
 
-        const htmlFile = `${site.SiteId}_${pageCounter}.html`.replace(/[^a-zA-Z0-9._-]/g, '_');
-        fs.writeFileSync(path.join(outputDir, 'html', htmlFile), html, 'utf8');
+          const htmlFile = `${site.SiteId}_${pageCounter}.html`.replace(/[^a-zA-Z0-9._-]/g, '_');
+          fs.writeFileSync(path.join(outputDir, 'html', htmlFile), html, 'utf8');
 
-        const discovered = await extractEmbeds(page);
+          const discovered = await extractEmbeds(page);
 
-        // Collect <a href> links from the live page and filter to same-site subpages.
-        const pageLinks = await extractLinks(page, currentUrl);
-        const internalLinks = new Set([...pageLinks].filter(u => isInternalPage(siteScope, u)));
-        const externalDomains = new Set();
-        let embedCount = 0;
+          // Collect <a href> links from the live page and filter to same-site subpages.
+          const pageLinks = await extractLinks(page, currentUrl);
+          const internalLinks = new Set([...pageLinks].filter(u => isInternalPage(siteScope, u)));
+          const externalDomains = new Set();
+          let embedCount = 0;
 
-        for (const item of discovered) {
-          const normalized = normalizeUrl(item.url);
-          if (!normalized) continue;
-          const type = classifyUrl(normalized);
-          let itemHost;
-          try { itemHost = new URL(normalized).host.toLowerCase(); } catch { continue; }
+          for (const item of discovered) {
+            const normalized = normalizeUrl(item.url);
+            if (!normalized) continue;
+            const type = classifyUrl(normalized);
+            let itemHost;
+            try { itemHost = new URL(normalized).host.toLowerCase(); } catch { continue; }
 
-          if (type !== 'Other' || item.kind === 'iframe' || item.kind === 'embed' || item.kind === 'object' || item.kind === 'youtube-pattern') {
-            embedCount += 1;
-            embedsOut.push({
-              SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
-              PageUrl: currentUrl, PageTitle: title, Depth: current.depth,
-              ItemKind: item.kind, ArtifactType: type, ArtifactUrl: normalized, ContextHtml: item.context
-            });
+            if (type !== 'Other' || item.kind === 'iframe' || item.kind === 'embed' || item.kind === 'object' || item.kind === 'youtube-pattern') {
+              embedCount += 1;
+              embedsOut.push({
+                SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
+                PageUrl: currentUrl, PageTitle: title, Depth: current.depth,
+                ItemKind: item.kind, ArtifactType: type, ArtifactUrl: normalized, ContextHtml: item.context
+              });
+            }
+
+            if (itemHost !== 'sites.google.com') {
+              externalDomains.add(itemHost);
+            }
           }
 
-          if (itemHost !== 'sites.google.com') {
-            externalDomains.add(itemHost);
+          // Enqueue unvisited subpages discovered on this page.
+          let newLinks = 0;
+          for (const nextUrl of internalLinks) {
+            if (!visited.has(nextUrl)) { queue.push({ url: nextUrl, depth: current.depth + 1 }); newLinks++; }
           }
+
+          for (const domain of externalDomains) externalDomainsOut.push({ SiteId: site.SiteId, SiteName: site.SiteName, PageUrl: currentUrl, ExternalDomain: domain });
+
+          pagesOut.push({
+            SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
+            PageUrl: currentUrl, PageTitle: title, Depth: current.depth,
+            InternalLinksDiscovered: internalLinks.size, EmbedCount: embedCount,
+            HtmlSnapshot: htmlFile, CrawlStatus: 'Success'
+          });
+          console.log(`  [depth=${current.depth}] Page ${pageCounter}: "${title}" | embeds=${embedCount} | links=${internalLinks.size} (${newLinks} new) | queue=${queue.length}`);
+        } catch (err) {
+          console.error(`  ERROR on ${currentUrl}: ${err.message || err}`);
+          pagesOut.push({
+            SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
+            PageUrl: currentUrl, PageTitle: '', Depth: current.depth,
+            InternalLinksDiscovered: 0, EmbedCount: 0, HtmlSnapshot: '',
+            CrawlStatus: `Error: ${String(err.message || err)}`
+          });
+        } finally {
+          await page.close();
         }
-
-        // Enqueue unvisited subpages discovered on this page.
-        let newLinks = 0;
-        for (const nextUrl of internalLinks) {
-          if (!visited.has(nextUrl)) { queue.push({ url: nextUrl, depth: current.depth + 1 }); newLinks++; }
-        }
-
-        for (const domain of externalDomains) externalDomainsOut.push({ SiteId: site.SiteId, SiteName: site.SiteName, PageUrl: currentUrl, ExternalDomain: domain });
-
-        pagesOut.push({
-          SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
-          PageUrl: currentUrl, PageTitle: title, Depth: current.depth,
-          InternalLinksDiscovered: internalLinks.size, EmbedCount: embedCount,
-          HtmlSnapshot: htmlFile, CrawlStatus: 'Success'
-        });
-        console.log(`  [depth=${current.depth}] Page ${pageCounter}: "${title}" | embeds=${embedCount} | links=${internalLinks.size} (${newLinks} new) | queue=${queue.length}`);
-      } catch (err) {
-        pagesOut.push({
-          SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
-          PageUrl: currentUrl, PageTitle: '', Depth: current.depth,
-          InternalLinksDiscovered: 0, EmbedCount: 0, HtmlSnapshot: '',
-          CrawlStatus: `Error: ${String(err.message || err)}`
-        });
-      } finally {
-        await page.close();
       }
     }
+  } finally {
+    // Always save whatever was collected — even if an error stopped the crawl early.
+    await browser.close().catch(() => {});
+    writeCsv(path.join(outputDir, '07_Pages_Enhanced.csv'), pagesOut);
+    writeCsv(path.join(outputDir, '08_Embeds_Enhanced.csv'), embedsOut);
+    writeCsv(path.join(outputDir, '09_ExternalDomains_Enhanced.csv'), externalDomainsOut);
+    console.log('\nOutput saved to: ' + outputDir);
+    console.log(`Pages: ${pagesOut.length} | Embeds: ${embedsOut.length} | Domains: ${externalDomainsOut.length}`);
   }
-
-  await browser.close();
-  writeCsv(path.join(outputDir, '07_Pages_Enhanced.csv'), pagesOut);
-  writeCsv(path.join(outputDir, '08_Embeds_Enhanced.csv'), embedsOut);
-  writeCsv(path.join(outputDir, '09_ExternalDomains_Enhanced.csv'), externalDomainsOut);
-  console.log('Enhanced crawl complete.');
-  console.log(`Pages: ${pagesOut.length} | Embeds: ${embedsOut.length} | Domains: ${externalDomainsOut.length}`);
 })();
