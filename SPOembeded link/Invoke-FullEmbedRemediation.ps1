@@ -1,26 +1,26 @@
 <#
 .SYNOPSIS
-    End-to-end multi-site orchestrator: crawls all Google Sites, then migrates embeds
-    to each corresponding SharePoint Online site.
+    Reads crawl output from Run-EnhancedCrawl.ps1 and migrates embeds to each
+    corresponding SharePoint Online site.
 
 .DESCRIPTION
-    Reads a mapping CSV (default: SelectedSites.csv) where every row defines:
-      - SiteUrl      Google Sites source URL (crawled for embedded content)
-      - SiteName     Friendly label used in log output and per-site report filenames
-      - SPOSiteUrl   Destination SharePoint Online site URL
+    This script is the remediation half of the two-script workflow:
 
-    The script runs one unified crawl across all Google Sites, then loops through
-    each source->destination pair to apply the discovered embeds to the correct SPO site.
+      Step 1 (crawl)     : .\Run-EnhancedCrawl.ps1 -SitesCsv .\SelectedSites.csv
+      Step 2 (remediate) : .\Invoke-FullEmbedRemediation.ps1
 
-    Prerequisites (one-time setup in this folder):
-      npm install
-      npx playwright install chromium
-      node Save-GoogleAuth.js
+    It reads output\08_Embeds_Enhanced.csv produced by the crawl, then for every
+    row in SelectedSites.csv it:
+      - Filters embeds that belong to that Google Site
+      - Connects to the corresponding SPO site (SPOSiteUrl column)
+      - Matches Google Sites page titles to SPO page names
+      - Adds ContentEmbed web parts to the matched SPO pages
+
+    SelectedSites.csv required columns : SiteUrl, SPOSiteUrl
+    SelectedSites.csv optional columns : SiteName
 
 .PARAMETER MappingCsv
     Path to the source->destination mapping CSV.
-    Required columns : SiteUrl, SPOSiteUrl
-    Optional columns : SiteName
     Defaults to SelectedSites.csv in this folder.
 
 .PARAMETER ClientId
@@ -29,31 +29,23 @@
 .PARAMETER TenantId
     Tenant name (e.g. contoso.onmicrosoft.com). Derived from the first SPOSiteUrl if omitted.
 
-.PARAMETER SkipGoogleAuth
-    Skip the Google sign-in step if .auth\state.json is already fresh.
-
-.PARAMETER SkipCrawl
-    Skip the crawl and use existing output\08_Embeds_Enhanced.csv.
-
 .PARAMETER DryRun
     Preview only -- no changes are written to SharePoint.
 
 .EXAMPLE
+    # Normal two-step workflow
+    .\Run-EnhancedCrawl.ps1 -SitesCsv .\SelectedSites.csv
     .\Invoke-FullEmbedRemediation.ps1
 
 .EXAMPLE
-    .\Invoke-FullEmbedRemediation.ps1 -MappingCsv ".\SelectedSites.csv" -DryRun
-
-.EXAMPLE
-    .\Invoke-FullEmbedRemediation.ps1 -SkipCrawl -DryRun
+    # Dry-run after crawl to preview what would be applied
+    .\Invoke-FullEmbedRemediation.ps1 -DryRun
 #>
 [CmdletBinding()]
 param(
-    [string]$MappingCsv     = "",
-    [string]$ClientId       = "3834b2e7-ab80-45fc-b4c8-ed5c960076b7",
-    [string]$TenantId       = "",
-    [switch]$SkipGoogleAuth,
-    [switch]$SkipCrawl,
+    [string]$MappingCsv = "",
+    [string]$ClientId   = "3834b2e7-ab80-45fc-b4c8-ed5c960076b7",
+    [string]$TenantId   = "",
     [switch]$DryRun
 )
 
@@ -64,15 +56,6 @@ if (-not (Test-Path $OutputDir)) { New-Item -ItemType Directory -Path $OutputDir
 # ── PREREQUISITE CHECKS ───────────────────────────────────────────────────────
 Write-Host "`n=== PREREQUISITE CHECKS ===" -ForegroundColor Cyan
 
-function Test-Prereq { param([string]$Cmd,[string]$Name)
-    if (-not (Get-Command $Cmd -ErrorAction SilentlyContinue)) { throw "$Name is required but not found in PATH." }
-}
-Test-Prereq "node" "Node.js"
-Test-Prereq "npm"  "npm"
-
-if (-not (Test-Path (Join-Path $PSScriptRoot "node_modules"))) {
-    throw "node_modules not found. Run in this folder first:`n  npm install`n  npx playwright install chromium"
-}
 if (-not (Get-Module -ListAvailable -Name "PnP.PowerShell")) {
     throw "PnP.PowerShell is required. Install: Install-Module PnP.PowerShell -Force"
 }
@@ -110,38 +93,14 @@ Write-Host "Tenant      : $tenantName" -ForegroundColor Green
 $validPairs | Format-Table @{L='Google Site (Source)';E={if ($_.SiteName) {$_.SiteName} else {$_.SiteUrl}}},
                             @{L='SPO Site (Destination)';E={$_.SPOSiteUrl}} -AutoSize
 
-# ── STEP 1: Google Auth ───────────────────────────────────────────────────────
-if (-not $SkipGoogleAuth) {
-    Write-Host "`n=== STEP 1: Google Sites Browser Auth ===" -ForegroundColor Cyan
-    Write-Host "A Chromium browser window will open. Sign in to Google, then press Enter here." -ForegroundColor Yellow
-    Push-Location $PSScriptRoot
-    & node "Save-GoogleAuth.js"
-    if ($LASTEXITCODE -ne 0) { throw "Auth script failed." }
-    Pop-Location
-    Write-Host "Auth state saved." -ForegroundColor Green
-}
-
-# ── STEP 2: Crawl all Google Sites ───────────────────────────────────────────
-if (-not $SkipCrawl) {
-    Write-Host "`n=== STEP 2: Crawling Google Sites ===" -ForegroundColor Cyan
-    Write-Host "Crawling $($validPairs.Count) site(s) listed in: $csvPath" -ForegroundColor Cyan
-    Push-Location $PSScriptRoot
-    & node "03_crawl_sites_enhanced.js" $csvPath
-    $crawlExit = $LASTEXITCODE
-    Pop-Location
-    if ($crawlExit -ne 0) {
-        Write-Warning "Crawl exited with code $crawlExit - partial results may still be available."
-    } else {
-        Write-Host "Crawl complete. Outputs in: $OutputDir" -ForegroundColor Green
-    }
-}
-
-# ── STEP 3: Load crawl output ─────────────────────────────────────────────────
-Write-Host "`n=== STEP 3: Loading crawl output ===" -ForegroundColor Cyan
+# ── STEP 1: Load crawl output from Run-EnhancedCrawl.ps1 ─────────────────────
+Write-Host "`n=== STEP 1: Loading crawl output ===" -ForegroundColor Cyan
 $EmbedsCsv = Join-Path $OutputDir "08_Embeds_Enhanced.csv"
 $PagesCsv  = Join-Path $OutputDir "07_Pages_Enhanced.csv"
 
-if (-not (Test-Path $EmbedsCsv)) { throw "Embeds CSV not found: $EmbedsCsv. Re-run without -SkipCrawl." }
+if (-not (Test-Path $EmbedsCsv)) {
+    throw "Crawl output not found: $EmbedsCsv`nRun the crawl first:`n  .\Run-EnhancedCrawl.ps1 -SitesCsv .\SelectedSites.csv"
+}
 
 $allEmbeds  = Import-Csv $EmbedsCsv
 $allPages   = if (Test-Path $PagesCsv) { Import-Csv $PagesCsv } else { @() }
@@ -152,7 +111,7 @@ $allRealEmbeds = $allEmbeds | Where-Object {
 }
 Write-Host "Total content embeds found across all sites: $($allRealEmbeds.Count)" -ForegroundColor Green
 
-# ── STEPS 4-6: Per-site: match embeds -> connect SPO -> apply web parts ───────
+# ── STEPS 2-4: Per-site: match embeds -> connect SPO -> apply web parts ───────
 $addScript      = Join-Path $PSScriptRoot "Add-SPOYouTubeWebParts.ps1"
 if (-not (Test-Path $addScript)) { throw "Add-SPOYouTubeWebParts.ps1 not found in $PSScriptRoot" }
 

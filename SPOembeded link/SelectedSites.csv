@@ -1,0 +1,4 @@
+SiteUrl,SiteName,SPOSiteUrl
+https://sites.google.com/d/SITE_ID_1/p/PAGE_ID_1,HR Portal,https://contoso.sharepoint.com/sites/hrportal
+https://sites.google.com/d/SITE_ID_2/p/PAGE_ID_2,IT Helpdesk,https://contoso.sharepoint.com/sites/ithelpdesk
+https://sites.google.com/myorg/mysite,Finance Intranet,https://contoso.sharepoint.com/sites/finance
