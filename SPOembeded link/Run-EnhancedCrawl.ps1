@@ -125,7 +125,7 @@ $exitCode = $LASTEXITCODE
 Pop-Location
 
 if ($exitCode -ne 0) {
-    Write-Warning "Crawl exited with code $exitCode — check errors above. Partial results may still have been saved."
+    Write-Warning "Crawl exited with code $exitCode - check errors above. Partial results may still have been saved."
 }
 
 Write-Host "`n=== Results ===" -ForegroundColor Green
