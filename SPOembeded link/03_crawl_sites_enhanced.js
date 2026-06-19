@@ -39,6 +39,63 @@ function normalizeUrl(url) {
   try { const u = new URL(url); u.hash = ''; return u.toString(); } catch { return null; }
 }
 
+// Build a scope descriptor so we can tell whether a link belongs to the same site.
+// Handles: /d/<siteId>/... (editor/preview), /view/<siteId>/... and
+// published sites (sites.google.com/<domain>/<name>/...).
+function buildSiteScope(siteUrl, siteId) {
+  if (siteId) return { type: 'id', siteId };
+  try {
+    const u = new URL(siteUrl);
+    const parts = u.pathname.split('/').filter(Boolean);
+    return { type: 'path', origin: u.origin, prefix: '/' + parts.slice(0, 2).join('/') + '/' };
+  } catch { return { type: 'none' }; }
+}
+
+// Returns true when `url` is a subpage of the same Google Site.
+function isInternalPage(scope, url) {
+  try {
+    const u = new URL(url);
+    if (u.host !== 'sites.google.com') return false;
+    if (scope.type === 'id')
+      return u.pathname.includes(`/d/${scope.siteId}/`) || u.pathname.includes(`/view/${scope.siteId}/`);
+    if (scope.type === 'path')
+      return u.origin === scope.origin && u.pathname.startsWith(scope.prefix);
+    return false;
+  } catch { return false; }
+}
+
+// Collect every <a href> link visible in the live page (incl. shadow DOM),
+// resolve relative hrefs against baseUrl, strip fragments, and drop
+// non-page targets (assets, embeds, mailto, etc.).
+async function extractLinks(page, baseUrl) {
+  const raw = await page.evaluate(() => {
+    const hrefs = new Set();
+    function scan(root) {
+      root.querySelectorAll('a[href]').forEach(a => {
+        const href = a.getAttribute('href');
+        if (href) hrefs.add(href);
+      });
+      root.querySelectorAll('*').forEach(el => { if (el.shadowRoot) scan(el.shadowRoot); });
+    }
+    scan(document);
+    return [...hrefs];
+  });
+
+  const links = new Set();
+  for (const href of raw) {
+    if (!href || href.startsWith('#') || /^(mailto|tel|javascript):/i.test(href)) continue;
+    try {
+      const resolved = new URL(href, baseUrl);
+      resolved.hash = '';
+      const p = resolved.pathname;
+      if (/\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?|ttf|pdf|zip)$/i.test(p)) continue;
+      if (/\/(embed|_\/|viewer|export|thumbnail|uc)\b/i.test(p)) continue;
+      links.add(resolved.toString());
+    } catch { /* ignore malformed hrefs */ }
+  }
+  return links;
+}
+
 async function extractEmbeds(page) {
   return await page.evaluate(() => {
     const results = [];
@@ -88,12 +145,18 @@ async function extractEmbeds(page) {
   } else {
     const inputCsv = arg || path.resolve(__dirname, 'output', '02_GSites_Inventory_Detailed.csv');
     if (!fs.existsSync(inputCsv)) throw new Error(`Input CSV not found: ${inputCsv}`);
-    sites = readCsv(inputCsv).map(r => ({
-      SiteId: r.id || r.SiteId || '',
-      SiteName: r.name || r.SiteName || '',
-      SiteUrl: r.webViewLink || r.webviewlink || r.SiteUrl || ''
-    })).filter(r => r.SiteId && r.SiteUrl);
-    console.log(`Loaded ${sites.length} site(s) from inventory: ${inputCsv}`);
+    sites = readCsv(inputCsv).map(r => {
+      // Support both the simple SelectedSites.csv format (SiteUrl, SiteName)
+      // and the full gam7 inventory format (id/SiteId, name/SiteName, webViewLink).
+      const siteUrl = (r.SiteUrl || r.webViewLink || r.webviewlink || '').trim();
+      const siteId  = (r.SiteId  || r.id  || extractSiteIdFromUrl(siteUrl) || '').trim();
+      const siteName = (r.SiteName || r.name || siteUrl).trim();
+      return { SiteId: siteId, SiteName: siteName, SiteUrl: siteUrl };
+    }).filter(r => {
+      if (!r.SiteUrl) { console.warn(`  Skipping row with no SiteUrl: ${JSON.stringify(r)}`); return false; }
+      return true;
+    });
+    console.log(`Loaded ${sites.length} site(s) from: ${inputCsv}`);
   }
 
   const browser = await chromium.launch({ headless: true });
@@ -103,6 +166,7 @@ async function extractEmbeds(page) {
 
   for (const site of sites) {
     console.log(`Crawling site: ${site.SiteName} | ${site.SiteUrl}`);
+    const siteScope = buildSiteScope(site.SiteUrl, site.SiteId);
     const visited = new Set();
     const queue = [{ url: site.SiteUrl, depth: 0 }];
     let pageCounter = 0;
@@ -133,7 +197,10 @@ async function extractEmbeds(page) {
         fs.writeFileSync(path.join(outputDir, 'html', htmlFile), html, 'utf8');
 
         const discovered = await extractEmbeds(page);
-        const internalLinks = new Set();
+
+        // Collect <a href> links from the live page and filter to same-site subpages.
+        const pageLinks = await extractLinks(page, currentUrl);
+        const internalLinks = new Set([...pageLinks].filter(u => isInternalPage(siteScope, u)));
         const externalDomains = new Set();
         let embedCount = 0;
 
@@ -141,9 +208,8 @@ async function extractEmbeds(page) {
           const normalized = normalizeUrl(item.url);
           if (!normalized) continue;
           const type = classifyUrl(normalized);
-          const isInternal = normalized.includes(site.SiteUrl.split('/d/')[0]);
-
-          if (item.kind === 'link' && isInternal) internalLinks.add(normalized);
+          let itemHost;
+          try { itemHost = new URL(normalized).host.toLowerCase(); } catch { continue; }
 
           if (type !== 'Other' || item.kind === 'iframe' || item.kind === 'embed' || item.kind === 'object' || item.kind === 'youtube-pattern') {
             embedCount += 1;
@@ -154,12 +220,17 @@ async function extractEmbeds(page) {
             });
           }
 
-          if (!isInternal) {
-            try { externalDomains.add(new URL(normalized).host.toLowerCase()); } catch { }
+          if (itemHost !== 'sites.google.com') {
+            externalDomains.add(itemHost);
           }
         }
 
-        for (const nextUrl of internalLinks) queue.push({ url: nextUrl, depth: current.depth + 1 });
+        // Enqueue unvisited subpages discovered on this page.
+        let newLinks = 0;
+        for (const nextUrl of internalLinks) {
+          if (!visited.has(nextUrl)) { queue.push({ url: nextUrl, depth: current.depth + 1 }); newLinks++; }
+        }
+
         for (const domain of externalDomains) externalDomainsOut.push({ SiteId: site.SiteId, SiteName: site.SiteName, PageUrl: currentUrl, ExternalDomain: domain });
 
         pagesOut.push({
@@ -168,7 +239,7 @@ async function extractEmbeds(page) {
           InternalLinksDiscovered: internalLinks.size, EmbedCount: embedCount,
           HtmlSnapshot: htmlFile, CrawlStatus: 'Success'
         });
-        console.log(`  Page ${pageCounter}: ${title} | ${discovered.length} raw items | ${embedCount} embeds`);
+        console.log(`  [depth=${current.depth}] Page ${pageCounter}: "${title}" | embeds=${embedCount} | links=${internalLinks.size} (${newLinks} new) | queue=${queue.length}`);
       } catch (err) {
         pagesOut.push({
           SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: site.SiteUrl,
