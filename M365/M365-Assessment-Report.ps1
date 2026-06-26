@@ -100,8 +100,13 @@ function Connect-ToGraph {
 
 function Invoke-SafeGraph {
     param([scriptblock]$Block)
-    try   { & $Block }
-    catch { Write-Log "Graph call skipped: $($_.Exception.Message)" "WARN"; return $null }
+    try   { & $Block 2>$null }
+    catch {
+        # Extract only the first line so 403 HTTP dumps don't flood the log
+        $msg = ($_.Exception.Message -split "`n")[0].Trim()
+        Write-Log "Graph call skipped: $msg" "WARN"
+        return $null
+    }
 }
 #endregion
 
@@ -164,6 +169,11 @@ function Get-TeamsAssessment {
         $channels = @(Invoke-SafeGraph { Get-MgTeamChannel -TeamId $t.Id -All })
         $members  = @(Invoke-SafeGraph { Get-MgTeamMember  -TeamId $t.Id -All })
 
+        # Fallback to basic info from the enumerated object when Get-MgTeam is Forbidden
+        $teamDesc    = if ($detail -and $detail.Description) { $detail.Description } else { "" }
+        $teamVis     = if ($detail -and $detail.Visibility)  { $detail.Visibility  } else { if ($t.Visibility) { $t.Visibility } else { "Unknown" } }
+        $teamArchive = if ($detail) { $detail.IsArchived } else { $false }
+
         $owners  = @(); $guests = @(); $regular = @()
         if ($members) {
             $owners  = @($members | Where-Object { $_.Roles -contains "owner" })
@@ -178,9 +188,9 @@ function Get-TeamsAssessment {
         $results.Add([PSCustomObject]@{
             TeamId            = $t.Id
             DisplayName       = $t.DisplayName
-            Description       = if ($detail -and $detail.Description) { $detail.Description } else { "" }
-            Visibility        = if ($detail -and $detail.Visibility) { $detail.Visibility } else { "N/A" }
-            IsArchived        = if ($detail) { $detail.IsArchived } else { $false }
+            Description       = $teamDesc
+            Visibility        = $teamVis
+            IsArchived        = $teamArchive
             OwnersCount       = $owners.Count
             MembersCount      = $regular.Count
             GuestsCount       = $guests.Count
@@ -222,10 +232,11 @@ function Get-PlannerAssessment {
             if (-not $SkipPlannerDetail) {
                 $tasks = Invoke-SafeGraph { Get-MgPlannerPlanTask -PlannerPlanId $plan.Id -All }
                 if ($tasks) {
+                    $tasks      = @($tasks)
                     $totalTasks = $tasks.Count
-                    $notStarted = ($tasks | Where-Object { $_.PercentComplete -eq 0 }).Count
-                    $inProgress = ($tasks | Where-Object { $_.PercentComplete -gt 0 -and $_.PercentComplete -lt 100 }).Count
-                    $completed  = ($tasks | Where-Object { $_.PercentComplete -eq 100 }).Count
+                    $notStarted = @($tasks | Where-Object { $_.PercentComplete -eq 0 }).Count
+                    $inProgress = @($tasks | Where-Object { $_.PercentComplete -gt 0 -and $_.PercentComplete -lt 100 }).Count
+                    $completed  = @($tasks | Where-Object { $_.PercentComplete -eq 100 }).Count
                 }
             }
 
@@ -242,7 +253,7 @@ function Get-PlannerAssessment {
                 GroupName    = $grp.DisplayName
                 CreatedBy    = $creatorName
                 CreatedDate  = if ($plan.CreatedDateTime) { $plan.CreatedDateTime.ToString("yyyy-MM-dd") } else { "N/A" }
-                BucketsCount = if ($buckets) { $buckets.Count } else { 0 }
+                BucketsCount = if ($buckets) { @($buckets).Count } else { 0 }
                 TotalTasks   = $totalTasks
                 NotStarted   = $notStarted
                 InProgress   = $inProgress
@@ -296,17 +307,17 @@ function Export-HTMLReport {
     Add-Type -AssemblyName System.Web
 
     $totalGroups   = $GroupsData.Count
-    $teamsLinked   = ($GroupsData | Where-Object { $_.IsTeamsConnected }).Count
-    $plannerLinked = ($GroupsData | Where-Object { $_.HasPlanner }).Count
-    $noOwner       = ($GroupsData | Where-Object { $_.OwnersCount -eq 0 }).Count
-    $pubGroups     = ($GroupsData | Where-Object { $_.Visibility -eq "Public" }).Count
+    $teamsLinked   = @($GroupsData | Where-Object { $_.IsTeamsConnected }).Count
+    $plannerLinked = @($GroupsData | Where-Object { $_.HasPlanner }).Count
+    $noOwner       = @($GroupsData | Where-Object { $_.OwnersCount -eq 0 }).Count
+    $pubGroups     = @($GroupsData | Where-Object { $_.Visibility -eq "Public" }).Count
     $totalTeams    = $TeamsData.Count
-    $archivedTeams = ($TeamsData | Where-Object { $_.IsArchived }).Count
-    $totalGuests   = ($TeamsData | Measure-Object GuestsCount -Sum).Sum
+    $archivedTeams = @($TeamsData  | Where-Object { $_.IsArchived }).Count
+    $totalGuests   = [int](($TeamsData   | Measure-Object GuestsCount -Sum).Sum)
     $totalPlans    = $PlannerData.Count
-    $totalTasks    = ($PlannerData | Measure-Object TotalTasks -Sum).Sum
-    $doneTasks     = ($PlannerData | Measure-Object Completed  -Sum).Sum
-    $openTasks     = ($PlannerData | Measure-Object NotStarted -Sum).Sum
+    $totalTasks    = [int](($PlannerData | Measure-Object TotalTasks  -Sum).Sum)
+    $doneTasks     = [int](($PlannerData | Measure-Object Completed   -Sum).Sum)
+    $openTasks     = [int](($PlannerData | Measure-Object NotStarted  -Sum).Sum)
 
     $grpCols = $GroupsData  | Select-Object DisplayName,Email,Visibility,CreatedDate,OwnersCount,MembersCount,IsTeamsConnected,HasPlanner,Owners
     $tmsCols = $TeamsData   | Select-Object DisplayName,Visibility,IsArchived,OwnersCount,MembersCount,GuestsCount,TotalChannels,StandardChannels,PrivateChannels,SharedChannels,Owners
