@@ -35,10 +35,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$AdminUrl,
+    [Parameter(Mandatory)][string]$ClientId,
+    [Parameter(Mandatory)][string]$TenantId,
     [string]$OutputPath         = (Join-Path $PSScriptRoot "SPO_Assessment_$(Get-Date -f 'yyyyMMdd_HHmmss')"),
-    [string]$ClientId           = "",
     [string]$ClientSecret       = "",
-    [string]$TenantId           = "",
     [int]   $LargeFileSizeMB    = 500,
     [int]   $LargeListThreshold = 5000,
     [bool]  $SkipPersonalSites  = $true,
@@ -90,19 +90,23 @@ function Assert-Modules {
 #region CONNECTION
 function Connect-Admin {
     Write-Log "Connecting to SPO Admin: $AdminUrl" "INFO"
-    if ($ClientId -and $ClientSecret -and $TenantId) {
+    if ($ClientSecret) {
+        # App-only: ClientId + ClientSecret (unattended/headless)
+        Write-Log "Auth mode: App-Only (ClientId + ClientSecret)" "INFO"
         Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -ClientSecret $ClientSecret -Tenant $TenantId
     } else {
-        Connect-PnPOnline -Url $AdminUrl -Interactive
+        # Delegated: ClientId + interactive browser login
+        Write-Log "Auth mode: Interactive (ClientId + browser login)" "INFO"
+        Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -Tenant $TenantId -Interactive
     }
     Write-Log "Connected to admin center." "SUCCESS"
 }
 
 function Connect-Site { param([string]$Url)
-    if ($ClientId -and $ClientSecret -and $TenantId) {
+    if ($ClientSecret) {
         Connect-PnPOnline -Url $Url -ClientId $ClientId -ClientSecret $ClientSecret -Tenant $TenantId -ErrorAction Stop
     } else {
-        Connect-PnPOnline -Url $Url -Interactive -ErrorAction Stop
+        Connect-PnPOnline -Url $Url -ClientId $ClientId -Tenant $TenantId -Interactive -ErrorAction Stop
     }
 }
 #endregion
