@@ -88,10 +88,12 @@ function Connect-ToGraph {
         $cred = New-Object System.Management.Automation.PSCredential($ClientId, $sec)
         Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $cred -NoWelcome
     } else {
-        Write-Log "Connecting interactively (browser will open)..." "INFO"
-        Connect-MgGraph -Scopes $scopes -NoWelcome
+        Write-Log "Connecting via Device Code flow..." "INFO"
+        Write-Log "A URL and code will appear below. Open the URL in any browser and enter the code." "WARN"
+        Connect-MgGraph -Scopes $scopes -UseDeviceAuthentication -NoWelcome
     }
     $ctx = Get-MgContext
+    if (-not $ctx) { throw "Authentication failed. No Graph context established." }
     Write-Log "Connected as: $($ctx.Account) | Tenant: $($ctx.TenantId)" "SUCCESS"
 }
 
