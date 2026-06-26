@@ -28,7 +28,7 @@
         Microsoft.Graph.Teams, Microsoft.Graph.Planner, Microsoft.Graph.Users
     Permissions required (delegated or application):
         Group.Read.All, Team.ReadBasic.All, TeamMember.Read.All,
-        Channel.ReadBasic.All, Tasks.Read.All, User.Read.All,
+        Channel.ReadBasic.All, Tasks.Read, User.Read.All,
         Directory.Read.All, GroupMember.Read.All
 #>
 
@@ -79,7 +79,7 @@ function Connect-ToGraph {
     param([string]$TenantId, [string]$ClientId, [string]$ClientSecret)
     $scopes = @(
         "Group.Read.All","Team.ReadBasic.All","TeamMember.Read.All",
-        "Channel.ReadBasic.All","Tasks.Read.All","User.Read.All",
+        "Channel.ReadBasic.All","Tasks.Read","User.Read.All",
         "Directory.Read.All","GroupMember.Read.All"
     )
     if ($ClientId -and $ClientSecret -and $TenantId) {
