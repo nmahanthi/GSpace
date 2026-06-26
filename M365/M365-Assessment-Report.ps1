@@ -90,7 +90,7 @@ function Connect-ToGraph {
     } else {
         Write-Log "Connecting via Device Code flow..." "INFO"
         Write-Log "A URL and code will appear below. Open the URL in any browser and enter the code." "WARN"
-        Connect-MgGraph -Scopes $scopes -UseDeviceAuthentication -NoWelcome
+        Connect-MgGraph -Scopes $scopes -UseDeviceAuthentication -NoWelcome -TenantId (if ($TenantId) { $TenantId } else { "organizations" })
     }
     $ctx = Get-MgContext
     if (-not $ctx) { throw "Authentication failed. No Graph context established." }
