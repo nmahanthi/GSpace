@@ -121,8 +121,8 @@ function Get-M365GroupsAssessment {
                        -Status "$i / $($groups.Count) : $($g.DisplayName)" `
                        -PercentComplete (($i / $groups.Count) * 100)
 
-        $owners  = Invoke-SafeGraph { Get-MgGroupOwner  -GroupId $g.Id -All }
-        $members = Invoke-SafeGraph { Get-MgGroupMember -GroupId $g.Id -All }
+        $owners  = @(Invoke-SafeGraph { Get-MgGroupOwner  -GroupId $g.Id -All })
+        $members = @(Invoke-SafeGraph { Get-MgGroupMember -GroupId $g.Id -All })
         $isTeam  = $g.ResourceProvisioningOptions -contains "Team"
 
         $results.Add([PSCustomObject]@{
@@ -132,13 +132,11 @@ function Get-M365GroupsAssessment {
             Email            = $g.Mail
             Visibility       = if ($g.Visibility) { $g.Visibility } else { "Private" }
             CreatedDate      = if ($g.CreatedDateTime) { $g.CreatedDateTime.ToString("yyyy-MM-dd") } else { "N/A" }
-            OwnersCount      = if ($owners)  { $owners.Count  } else { 0 }
-            MembersCount     = if ($members) { $members.Count } else { 0 }
+            OwnersCount      = $owners.Count
+            MembersCount     = $members.Count
             IsTeamsConnected = $isTeam
             HasPlanner       = $false
-            Owners           = if ($owners) {
-                                   ($owners | ForEach-Object { $_.AdditionalProperties["displayName"] }) -join "; "
-                               } else { "None" }
+            Owners           = if ($owners.Count -gt 0) { ($owners | ForEach-Object { $_.AdditionalProperties["displayName"] }) -join "; " } else { "None" }
         })
     }
     Write-Progress -Activity "Analyzing M365 Groups" -Completed
@@ -163,19 +161,19 @@ function Get-TeamsAssessment {
                        -PercentComplete (($i / $allTeams.Count) * 100)
 
         $detail   = Invoke-SafeGraph { Get-MgTeam -TeamId $t.Id }
-        $channels = Invoke-SafeGraph { Get-MgTeamChannel -TeamId $t.Id -All }
-        $members  = Invoke-SafeGraph { Get-MgTeamMember  -TeamId $t.Id -All }
+        $channels = @(Invoke-SafeGraph { Get-MgTeamChannel -TeamId $t.Id -All })
+        $members  = @(Invoke-SafeGraph { Get-MgTeamMember  -TeamId $t.Id -All })
 
         $owners  = @(); $guests = @(); $regular = @()
         if ($members) {
-            $owners  = $members | Where-Object { $_.Roles -contains "owner" }
-            $guests  = $members | Where-Object { $_.AdditionalProperties["userType"] -eq "Guest" }
-            $regular = $members | Where-Object { ($_.Roles -notcontains "owner") -and ($_.AdditionalProperties["userType"] -ne "Guest") }
+            $owners  = @($members | Where-Object { $_.Roles -contains "owner" })
+            $guests  = @($members | Where-Object { $_.AdditionalProperties["userType"] -eq "Guest" })
+            $regular = @($members | Where-Object { ($_.Roles -notcontains "owner") -and ($_.AdditionalProperties["userType"] -ne "Guest") })
         }
 
-        $stdCh  = if ($channels) { ($channels | Where-Object { $_.MembershipType -eq "standard" }).Count } else { 0 }
-        $privCh = if ($channels) { ($channels | Where-Object { $_.MembershipType -eq "private"  }).Count } else { 0 }
-        $shrdCh = if ($channels) { ($channels | Where-Object { $_.MembershipType -eq "shared"   }).Count } else { 0 }
+        $stdCh  = @($channels | Where-Object { $_.MembershipType -eq "standard" }).Count
+        $privCh = @($channels | Where-Object { $_.MembershipType -eq "private"  }).Count
+        $shrdCh = @($channels | Where-Object { $_.MembershipType -eq "shared"   }).Count
 
         $results.Add([PSCustomObject]@{
             TeamId            = $t.Id
@@ -186,8 +184,8 @@ function Get-TeamsAssessment {
             OwnersCount       = $owners.Count
             MembersCount      = $regular.Count
             GuestsCount       = $guests.Count
-            TotalMembersCount = if ($members) { $members.Count } else { 0 }
-            TotalChannels     = if ($channels) { $channels.Count } else { 0 }
+            TotalMembersCount = $members.Count
+            TotalChannels     = $channels.Count
             StandardChannels  = $stdCh
             PrivateChannels   = $privCh
             SharedChannels    = $shrdCh
