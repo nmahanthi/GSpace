@@ -1,0 +1,6 @@
+SiteId,SiteUrl,SiteName,SPOSiteUrl,Notes
+,https://sites.google.com/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms/s/hr-portal,,https://yourtenant.sharepoint.com/sites/HR,HR Portal
+1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms,,,,IT Intranet - resolved by SiteId
+,,IT Intranet,https://yourtenant.sharepoint.com/sites/IT,Resolved by display name fallback
+,https://sites.google.com/a/yourdomain.com/finance,,https://yourtenant.sharepoint.com/sites/Finance,Classic-style URL - name extracted automatically
+,https://sites.google.com/a/yourdomain.com/legal,,https://yourtenant.sharepoint.com/sites/Legal,
