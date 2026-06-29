@@ -10,8 +10,19 @@
     SPO admin center URL, e.g. https://contoso-admin.sharepoint.com
 .PARAMETER OutputPath
     Output folder (created if absent). Defaults to script directory + timestamp.
-.PARAMETER ClientId / ClientSecret / TenantId
-    App-only credentials. If omitted, interactive browser login is used.
+.PARAMETER ClientId
+    Azure AD Application (client) ID. Required.
+.PARAMETER TenantId
+    Azure AD Tenant ID (GUID or domain). Required.
+.PARAMETER CertificateThumbprint
+    Thumbprint of a certificate installed in the current user's or local machine's
+    certificate store and uploaded to the Azure AD app registration.
+    When supplied, connects app-only using the certificate — no secret or interactive
+    login needed.  Preferred for unattended / headless runs.
+.PARAMETER ClientSecret
+    App-only client secret.  Used only when CertificateThumbprint is not supplied.
+    If neither CertificateThumbprint nor ClientSecret is provided, interactive
+    browser login is used as a fallback.
 .PARAMETER LargeFileSizeMB
     Files >= this size (MB) are flagged as large. Default: 500.
 .PARAMETER LargeListThreshold
@@ -27,18 +38,28 @@
 .PARAMETER ExportCSV
     Also write raw CSV files alongside Excel and HTML.
 .EXAMPLE
-    .\SPO-Migration-Assessment.ps1 -AdminUrl "https://contoso-admin.sharepoint.com" -ExportCSV
+    # App-only with certificate (recommended — no secret, no interactive prompt)
+    .\SPO-Migration-Assessment.ps1 -AdminUrl "https://contoso-admin.sharepoint.com" `
+        -ClientId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -TenantId "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -CertificateThumbprint "AABBCCDDEEFF..." -ExportCSV
 .EXAMPLE
+    # App-only with client secret
     .\SPO-Migration-Assessment.ps1 -AdminUrl "https://contoso-admin.sharepoint.com" `
         -ClientId "xxx" -ClientSecret "yyy" -TenantId "zzz" -CheckLargeFiles -MaxSites 50
+.EXAMPLE
+    # Interactive browser login (fallback — requires a browser)
+    .\SPO-Migration-Assessment.ps1 -AdminUrl "https://contoso-admin.sharepoint.com" `
+        -ClientId "xxx" -TenantId "zzz" -ExportCSV
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$AdminUrl,
     [Parameter(Mandatory)][string]$ClientId,
     [Parameter(Mandatory)][string]$TenantId,
-    [string]$OutputPath         = (Join-Path $PSScriptRoot "SPO_Assessment_$(Get-Date -f 'yyyyMMdd_HHmmss')"),
-    [string]$ClientSecret       = "",
+    [string]$OutputPath              = (Join-Path $PSScriptRoot "SPO_Assessment_$(Get-Date -f 'yyyyMMdd_HHmmss')"),
+    [string]$CertificateThumbprint   = "",
+    [string]$ClientSecret            = "",
     [int]   $LargeFileSizeMB    = 500,
     [int]   $LargeListThreshold = 5000,
     [bool]  $SkipPersonalSites  = $true,
@@ -90,12 +111,16 @@ function Assert-Modules {
 #region CONNECTION
 function Connect-Admin {
     Write-Log "Connecting to SPO Admin: $AdminUrl" "INFO"
-    if ($ClientSecret) {
+    if ($CertificateThumbprint) {
+        # App-only: ClientId + Certificate (no secret, no interactive prompt — recommended)
+        Write-Log "Auth mode: App-Only (ClientId + Certificate thumbprint)" "INFO"
+        Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -Tenant $TenantId -Thumbprint $CertificateThumbprint
+    } elseif ($ClientSecret) {
         # App-only: ClientId + ClientSecret (unattended/headless)
         Write-Log "Auth mode: App-Only (ClientId + ClientSecret)" "INFO"
         Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -ClientSecret $ClientSecret -Tenant $TenantId
     } else {
-        # Delegated: ClientId + interactive browser login
+        # Delegated: ClientId + interactive browser login (fallback)
         Write-Log "Auth mode: Interactive (ClientId + browser login)" "INFO"
         Connect-PnPOnline -Url $AdminUrl -ClientId $ClientId -Tenant $TenantId -Interactive
     }
@@ -103,7 +128,9 @@ function Connect-Admin {
 }
 
 function Connect-Site { param([string]$Url)
-    if ($ClientSecret) {
+    if ($CertificateThumbprint) {
+        Connect-PnPOnline -Url $Url -ClientId $ClientId -Tenant $TenantId -Thumbprint $CertificateThumbprint -ErrorAction Stop
+    } elseif ($ClientSecret) {
         Connect-PnPOnline -Url $Url -ClientId $ClientId -ClientSecret $ClientSecret -Tenant $TenantId -ErrorAction Stop
     } else {
         Connect-PnPOnline -Url $Url -ClientId $ClientId -Tenant $TenantId -Interactive -ErrorAction Stop
