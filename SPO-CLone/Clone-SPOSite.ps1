@@ -10,6 +10,7 @@
 $SourceSiteUrl  = "https://yourtenant.sharepoint.com/sites/sourcesite"
 $AdminUrl       = "https://yourtenant-admin.sharepoint.com"
 $TenantUrl      = "https://yourtenant.sharepoint.com"
+$AdminEmail     = "admin@yourtenant.onmicrosoft.com"   # Site owner / your Global Admin UPN
 
 # Template output path
 $TemplatePath   = "C:\SPOTemplates\SiteTemplate.xml"
@@ -148,9 +149,13 @@ foreach ($site in $TargetSites) {
         } else {
             Write-Log "Creating site: $siteUrl"
 
-            New-PnPSite -Type TeamSite `
+            # TeamSiteWithoutMicrosoft365Group uses SharePoint Admin APIs only
+            # (no Microsoft Graph call), avoiding the 403 Group.ReadWrite.All error
+            # that occurs with -Type TeamSite on tenants where Graph consent is missing.
+            New-PnPSite -Type TeamSiteWithoutMicrosoft365Group `
                 -Title $site.Title `
-                -Alias $site.Alias `
+                -Url $siteUrl `
+                -Owner $AdminEmail `
                 -Wait
 
             Write-Log "Site created: $siteUrl" "SUCCESS"
