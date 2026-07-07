@@ -3,13 +3,12 @@
     Complete Google Sites Non-Prod Assessment Orchestrator
 
 .DESCRIPTION
-    This script orchestrates all 5 steps of the Google Sites assessment:
-    1. GAM exports (inventory, permissions, artifacts)
+    This script orchestrates all steps of the Google Sites assessment:
+    1. GAM exports (inventory, permissions)
     2. Node.js dependency installation
     3. Browser authentication (manual step)
     4. Site crawling with Playwright
-    5. Artifact enrichment with Google APIs
-    6. Complexity scoring
+    5. Complexity scoring
 
 .PARAMETER PrimaryDomain
     Your primary domain (e.g., "rocheua.com") for external permission detection
@@ -37,9 +36,6 @@
 
 .PARAMETER SkipCrawl
     Skip site crawling step (use existing crawl output)
-
-.PARAMETER SkipEnrichment
-    Skip artifact enrichment step
 
 .PARAMETER UseApiExtract
     Use the Sites API v1 (03b_api_extract_embeds.js) instead of the Playwright
@@ -73,7 +69,7 @@
 
 .PARAMETER SelectedSitesCsv
     Path to a CSV file containing a list of specific site names or URLs to process.
-    Only these sites will be crawled, enriched, and scored. Useful for large
+    Only these sites will be crawled and scored. Useful for large
     tenants where processing all sites is not feasible. The CSV must contain
     a column named SiteName, name, Name, SiteUrl, url, URL, or SiteURL.
     If you provide Google Sites URLs, the site name will be extracted from the URL path.
@@ -109,7 +105,6 @@ param(
     [switch]$SkipGAMExport,
     [switch]$SkipBrowserAuth,
     [switch]$SkipCrawl,
-    [switch]$SkipEnrichment,
 
     # Use Sites API v1 extractor instead of Playwright crawler for Step 4B
     [switch]$UseApiExtract,
@@ -499,10 +494,7 @@ If the extracted names do not match the actual Drive file names, provide the exa
     $requiredFiles = @(
         'GSites_Inventory_Min.csv',
         'GSites_Inventory_Detailed.csv',
-        'GSites_Permissions.csv',
-        'Candidate_Sheets.csv',
-        'Candidate_Forms.csv',
-        'Candidate_Scripts.csv'
+        'GSites_Permissions.csv'
     )
 
     foreach ($file in $requiredFiles) {
@@ -847,8 +839,7 @@ if (-not $SkipCrawl) {
         $crawlOutputFiles = @(
             'Pages.csv',
             'Embeds.csv',
-            'ExternalDomains.csv',
-            'NetworkRequests.csv'
+            'ExternalDomains.csv'
         )
 
         foreach ($file in $crawlOutputFiles) {
@@ -869,121 +860,9 @@ else {
 }
 
 # ============================================================================
-# STEP 5: ARTIFACT ENRICHMENT
+# STEP 5: COMPLEXITY SCORING
 # ============================================================================
-if (-not $SkipEnrichment) {
-    Write-Step "STEP 5: Artifact Enrichment"
-
-    # Get OAuth token
-    $tokenAvailable = $false
-    if ([string]::IsNullOrWhiteSpace($AccessToken)) {
-        Write-Info "No access token provided, checking for gcloud CLI..."
-        try {
-            $gcloudCheck = Get-Command gcloud -ErrorAction SilentlyContinue
-            if ($null -eq $gcloudCheck) {
-                Write-Info "gcloud CLI not found in PATH - skipping token retrieval"
-            }
-            else {
-                Write-Info "Attempting to get token from gcloud (timeout: 5 seconds)..."
-                $job = Start-Job -ScriptBlock { gcloud auth print-access-token 2>&1 }
-                $completed = Wait-Job -Job $job -Timeout 5
-
-                if ($null -ne $completed) {
-                    # Same trim as Step 4A - prevents \r\n corrupting the Bearer header
-                    $AccessToken = (Receive-Job -Job $job | Out-String).Trim()
-                    Remove-Job -Job $job -Force
-
-                    if ($AccessToken -match '^ya29\.' -and $AccessToken.Length -gt 20) {
-                        Write-Success "Access token obtained from gcloud"
-                        $tokenAvailable = $true
-                    }
-                    elseif ($AccessToken -match 'ERROR') {
-                        Write-Info "gcloud auth not configured or expired - run: gcloud auth login"
-                    }
-                    else {
-                        Write-Info "Unexpected gcloud output - could not extract token"
-                    }
-                }
-                else {
-                    Write-Info "gcloud command timed out (>5 s) - skipping token retrieval"
-                    Remove-Job -Job $job -Force
-                }
-            }
-        }
-        catch {
-            Write-Info "Could not get access token from gcloud: $_"
-        }
-    }
-    else {
-        $tokenAvailable = $true
-        Write-Success "Using provided access token"
-    }
-
-    if (-not $tokenAvailable) {
-        Write-Host ""
-        Write-Host "========================================" -ForegroundColor Yellow
-        Write-Host "  Artifact Enrichment Skipped" -ForegroundColor Yellow
-        Write-Host "========================================" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "No OAuth 2.0 access token available." -ForegroundColor Gray
-        Write-Host "Artifact enrichment provides detailed metadata for Sheets, Forms, and Scripts." -ForegroundColor Gray
-        Write-Host ""
-        Write-Host "To enable enrichment, use one of these methods:" -ForegroundColor Yellow
-        Write-Host ""
-        Write-Host "  Method 1: Use gcloud CLI" -ForegroundColor Cyan
-        Write-Host "    gcloud auth login" -ForegroundColor White
-        Write-Host "    gcloud config set project YOUR_PROJECT_ID" -ForegroundColor White
-        Write-Host "    .\Run-FullAssessment.ps1 -PrimaryDomain 'rocheua.com'" -ForegroundColor White
-        Write-Host ""
-        Write-Host "  Method 2: Provide token directly" -ForegroundColor Cyan
-        Write-Host "    `$token = (gcloud auth print-access-token)" -ForegroundColor White
-        Write-Host "    .\Run-FullAssessment.ps1 -PrimaryDomain 'rocheua.com' -AccessToken `$token" -ForegroundColor White
-        Write-Host ""
-        Write-Host "  Method 3: Skip enrichment (current behavior)" -ForegroundColor Cyan
-        Write-Host "    .\Run-FullAssessment.ps1 -PrimaryDomain 'rocheua.com' -SkipEnrichment" -ForegroundColor White
-        Write-Host ""
-        Write-Info "Continuing without artifact enrichment..."
-        Write-Host ""
-    }
-    else {
-        $enrichScript = Join-Path $ScriptDir '04_enrich_artifacts.ps1'
-        Write-Info "Running artifact enrichment..."
-
-        # Pass token via env var - avoids command-line arg parsing that can mangle long tokens
-        $env:GCP_ACCESS_TOKEN = $AccessToken
-        & pwsh -ExecutionPolicy Bypass -File $enrichScript -OutputDir $OutputDir
-
-        Write-Success "Artifact enrichment completed"
-    }
-
-    # Verify enrichment output (only if token was available)
-    if ($tokenAvailable) {
-        $enrichOutputFiles = @(
-            'Sheets_Enrichment.csv',
-            'Forms_Enrichment.csv',
-            'Scripts_Enrichment.csv'
-        )
-
-        foreach ($file in $enrichOutputFiles) {
-            $filePath = Join-Path $OutputDir $file
-            if (Test-Path $filePath) {
-                $rowCount = Get-CsvRowCount -Path $filePath
-                Write-Info "  [OK] $file ($rowCount rows)"
-            }
-            else {
-                Write-Info "  [SKIP] $file (not created - no artifacts found)"
-            }
-        }
-    }
-}
-else {
-    Write-Step "STEP 5: Artifact Enrichment (SKIPPED)"
-}
-
-# ============================================================================
-# STEP 6: COMPLEXITY SCORING
-# ============================================================================
-Write-Step "STEP 6: Complexity Scoring"
+Write-Step "STEP 5: Complexity Scoring"
 
 $scoreScript = Join-Path $ScriptDir '05_score_sites.ps1'
 Write-Info "Generating complexity report..."

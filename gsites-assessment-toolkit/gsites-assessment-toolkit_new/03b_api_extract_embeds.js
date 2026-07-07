@@ -11,7 +11,6 @@
  * Output:   output/Pages.csv
  *           output/Embeds.csv
  *           output/ExternalDomains.csv
- *           output/NetworkRequests.csv  (empty — no browser used)
  */
 
 const fs = require('fs');
@@ -52,13 +51,11 @@ const OUTPUT_FILES = {
   pages: path.join(outputDir, 'Pages.csv'),
   embeds: path.join(outputDir, 'Embeds.csv'),
   domains: path.join(outputDir, 'ExternalDomains.csv'),
-  network: path.join(outputDir, 'NetworkRequests.csv'),
 };
 const CSV_COLS = {
   pages: ['SiteId', 'SiteName', 'SiteUrl', 'PageUrl', 'PageTitle', 'Depth', 'InternalLinksDiscovered', 'EmbedCount', 'HtmlSnapshot', 'CrawlStatus'],
   embeds: ['SiteId', 'SiteName', 'SiteUrl', 'PageUrl', 'PageTitle', 'Depth', 'ItemKind', 'ArtifactType', 'ArtifactUrl', 'AnchorText'],
   domains: ['SiteId', 'SiteName', 'PageUrl', 'ExternalDomain'],
-  network: ['Timestamp', 'Method', 'Url', 'ResourceType'],
 };
 function initOutputFiles() {
   for (const [key, file] of Object.entries(OUTPUT_FILES)) {

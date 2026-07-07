@@ -143,18 +143,6 @@ function sameHost(candidate, rootUrl) {
   const pagesOut = [];
   const embedsOut = [];
   const externalDomainsOut = [];
-  const requestsOut = [];
-
-  context.on('requestfinished', req => {
-    try {
-      requestsOut.push({
-        Timestamp: new Date().toISOString(),
-        Method: req.method(),
-        Url: req.url(),
-        ResourceType: req.resourceType()
-      });
-    } catch { }
-  });
 
   for (const site of sites) {
     console.log(`Crawling site: ${site.SiteName} | ${site.SiteUrl} [${site.UrlType} URL]`);
@@ -284,7 +272,6 @@ function sameHost(candidate, rootUrl) {
   writeCsv(path.join(outputDir, 'Pages.csv'), pagesOut);
   writeCsv(path.join(outputDir, 'Embeds.csv'), embedsOut);
   writeCsv(path.join(outputDir, 'ExternalDomains.csv'), externalDomainsOut);
-  writeCsv(path.join(outputDir, 'NetworkRequests.csv'), requestsOut);
 
   console.log('Crawl complete. Outputs written to output folder.');
 })();

@@ -68,7 +68,7 @@ if defined GAM_TARGET_FILE (
     echo [INFO] before you see any progress on the screen. Please be patient!
 )
 
-echo [1/6] Minimal Google Sites sanity export...
+echo [1/3] Minimal Google Sites sanity export...
 if defined GAM_SITES_FILTER (
     "%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,mimetype
 ) else (
@@ -76,26 +76,14 @@ if defined GAM_SITES_FILTER (
 )
 if errorlevel 1 goto :fail
 
-echo [2/6] Detailed Google Sites inventory...
+echo [2/3] Detailed Google Sites inventory...
 "%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks
 if errorlevel 1 goto :fail
 
-echo [3/6] Google Sites permissions and security...
+echo [3/3] Google Sites permissions and security...
 "%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,webviewlink,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
 
 if errorlevel 1 goto :fail
-
-    echo [4/6] Candidate Google Sheets inventory...
-    "%GAM_PATH%" config auto_batch_min 1 num_threads 10 redirect csv "%OUTDIR%\Candidate_Sheets.csv" multiprocess %GAM_USER_TARGET% print filelist query "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid
-    if errorlevel 1 goto :fail
-
-    echo [5/6] Candidate Google Forms inventory...
-    "%GAM_PATH%" config auto_batch_min 1 num_threads 10 redirect csv "%OUTDIR%\Candidate_Forms.csv" multiprocess %GAM_USER_TARGET% print filelist query "mimeType='application/vnd.google-apps.form' and trashed=false" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid
-    if errorlevel 1 goto :fail
-
-    echo [6/6] Candidate Apps Script inventory...
-    "%GAM_PATH%" config auto_batch_min 1 num_threads 10 redirect csv "%OUTDIR%\Candidate_Scripts.csv" multiprocess %GAM_USER_TARGET% print filelist query "mimeType='application/vnd.google-apps.script' and trashed=false" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid
-    if errorlevel 1 goto :fail
 
 echo.
 echo GAM exports completed successfully.

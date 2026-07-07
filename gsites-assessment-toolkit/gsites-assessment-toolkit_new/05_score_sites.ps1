@@ -11,17 +11,11 @@ $permissions = @()
 $pages = @()
 $embeds = @()
 $externalDomains = @()
-$sheetEnrichment = @()
-$formEnrichment = @()
-$scriptEnrichment = @()
 
 if (Test-Path (Join-Path $OutputDir 'GSites_Permissions.csv')) { $permissions = Import-Csv (Join-Path $OutputDir 'GSites_Permissions.csv') }
 if (Test-Path (Join-Path $OutputDir 'Pages.csv')) { $pages = Import-Csv (Join-Path $OutputDir 'Pages.csv') }
 if (Test-Path (Join-Path $OutputDir 'Embeds.csv')) { $embeds = Import-Csv (Join-Path $OutputDir 'Embeds.csv') }
 if (Test-Path (Join-Path $OutputDir 'ExternalDomains.csv')) { $externalDomains = Import-Csv (Join-Path $OutputDir 'ExternalDomains.csv') }
-if (Test-Path (Join-Path $OutputDir 'Sheets_Enrichment.csv')) { $sheetEnrichment = Import-Csv (Join-Path $OutputDir 'Sheets_Enrichment.csv') }
-if (Test-Path (Join-Path $OutputDir 'Forms_Enrichment.csv')) { $formEnrichment = Import-Csv (Join-Path $OutputDir 'Forms_Enrichment.csv') }
-if (Test-Path (Join-Path $OutputDir 'Scripts_Enrichment.csv')) { $scriptEnrichment = Import-Csv (Join-Path $OutputDir 'Scripts_Enrichment.csv') }
 
 $report = New-Object System.Collections.Generic.List[object]
 
@@ -34,12 +28,6 @@ foreach ($site in $sites) {
     $siteEmbeds = @($embeds | Where-Object { $_.SiteId -eq $siteId })
     $siteDomains = @($externalDomains | Where-Object { $_.SiteId -eq $siteId })
     $sitePerms = @($permissions | Where-Object { $_.id -eq $siteId })
-
-    $sheetMeasure = $sheetEnrichment | Where-Object { $_.SiteId -eq $siteId } | Measure-Object ComplexityPoints -Sum
-    $siteSheetPoints = if ($sheetMeasure -and $sheetMeasure.Sum) { $sheetMeasure.Sum } else { 0 }
-
-    $formMeasure = $formEnrichment | Where-Object { $_.SiteId -eq $siteId } | Measure-Object ComplexityPoints -Sum
-    $siteFormPoints = if ($formMeasure -and $formMeasure.Sum) { $formMeasure.Sum } else { 0 }
 
     $pageCount = $sitePages.Count
     $embedCount = $siteEmbeds.Count
@@ -61,9 +49,8 @@ foreach ($site in $sites) {
     $structurePoints = [Math]::Min(20, $pageCount) + [Math]::Min(10, $maxDepth * 2) + [Math]::Min(10, $errorPages * 3)
     $embedPoints = [Math]::Min(20, $embedCount) + [Math]::Min(10, $pagesWithEmbeds * 2) + [Math]::Min(10, $externalDomainCount * 2)
     $securityPoints = [Math]::Min(10, $publicCount * 5) + [Math]::Min(10, $externalCount * 2 + $domainCount)
-    $artifactPoints = [Math]::Min(15, [int]$siteSheetPoints) + [Math]::Min(15, [int]$siteFormPoints)
 
-    $totalScore = $structurePoints + $embedPoints + $securityPoints + $artifactPoints
+    $totalScore = $structurePoints + $embedPoints + $securityPoints
     $rating = if ($totalScore -le 25) { 'Low' } elseif ($totalScore -le 50) { 'Medium' } elseif ($totalScore -le 75) { 'High' } else { 'Very High' }
     $recommendation = if ($totalScore -le 25) { 'Direct migration candidate' } elseif ($totalScore -le 50) { 'Partial rebuild likely' } elseif ($totalScore -le 75) { 'Manual redesign needed' } else { 'High-risk; assess separately' }
 
@@ -86,7 +73,6 @@ foreach ($site in $sites) {
             StructurePoints       = $structurePoints
             EmbedPoints           = $embedPoints
             SecurityPoints        = $securityPoints
-            ArtifactPoints        = $artifactPoints
             TotalScore            = $totalScore
             Rating                = $rating
             Recommendation        = $recommendation

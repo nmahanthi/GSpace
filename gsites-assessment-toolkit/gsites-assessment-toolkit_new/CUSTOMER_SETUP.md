@@ -10,8 +10,8 @@ This document describes every change a customer must make before running the too
 |---|---|---|
 | [GAM](https://github.com/GAM-team/GAM) | 7.x | Google Workspace Admin API export |
 | [Node.js](https://nodejs.org/) | 18 or later | Site crawling and API extraction scripts |
-| [PowerShell](https://github.com/PowerShell/PowerShell) | 7.x (`pwsh`) | Orchestrator and enrichment scripts |
-| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | Any | OAuth token for Google APIs |
+| [PowerShell](https://github.com/PowerShell/PowerShell) | 7.x (`pwsh`) | Orchestrator and scoring scripts |
+| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | Any | OAuth token for the Sites API (published URLs) |
 
 ---
 
@@ -65,7 +65,7 @@ This saves credentials to `.auth\state.json`.
 
 ## Step 4 — Authenticate with gcloud (API token)
 
-Required for Steps 4A (published URLs) and 5 (Forms enrichment).
+Required for Step 4A (published URLs).
 
 ```powershell
 gcloud auth login
@@ -189,5 +189,4 @@ All output is written to the `output\` folder:
 | `Pages.csv` | Pages crawled per site |
 | `Embeds.csv` | Embedded content found on each page |
 | `ExternalDomains.csv` | External domains referenced |
-| `Forms_Enrichment.csv` | Google Forms metadata |
 | `Complexity_Report.csv` | Final complexity score per site |
