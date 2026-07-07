@@ -915,7 +915,6 @@ Write-Host ""
 Write-Host "NEXT STEPS:" -ForegroundColor Cyan
 Write-Host "  1. Review the complexity report: Complexity_Report.csv" -ForegroundColor Gray
 Write-Host "  2. Analyze high-complexity sites for migration planning" -ForegroundColor Gray
-Write-Host "  3. Review HTML snapshots in output/html/ folder" -ForegroundColor Gray
 Write-Host ""
 
 Write-Success "Assessment completed successfully!"

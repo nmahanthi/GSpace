@@ -84,7 +84,6 @@ function sameHost(candidate, rootUrl) {
 
 (async () => {
   fs.mkdirSync(outputDir, { recursive: true });
-  fs.mkdirSync(path.join(outputDir, 'html'), { recursive: true });
 
   // Read sites from main inventory
   const sitesData = readCsv(inputCsv).map(r => ({
@@ -163,11 +162,7 @@ function sameHost(candidate, rootUrl) {
         await page.waitForLoadState('load', { timeout: 60000 });
 
         const title = await page.title();
-        const html = await page.content();
         pageCounter += 1;
-
-        const htmlFile = `${site.SiteId}_${pageCounter}.html`.replace(/[^a-zA-Z0-9._-]/g, '_');
-        fs.writeFileSync(path.join(outputDir, 'html', htmlFile), html, 'utf8');
 
         const discovered = await page.evaluate(() => {
           const rows = [];
@@ -245,7 +240,6 @@ function sameHost(candidate, rootUrl) {
           Depth: current.depth,
           InternalLinksDiscovered: [...new Set(internalLinks)].length,
           EmbedCount: embedCount,
-          HtmlSnapshot: htmlFile,
           CrawlStatus: 'Success'
         });
       } catch (err) {
@@ -258,7 +252,6 @@ function sameHost(candidate, rootUrl) {
           Depth: current.depth,
           InternalLinksDiscovered: 0,
           EmbedCount: 0,
-          HtmlSnapshot: '',
           CrawlStatus: `Error: ${String(err.message || err)}`
         });
       } finally {

@@ -53,7 +53,7 @@ const OUTPUT_FILES = {
   domains: path.join(outputDir, 'ExternalDomains.csv'),
 };
 const CSV_COLS = {
-  pages: ['SiteId', 'SiteName', 'SiteUrl', 'PageUrl', 'PageTitle', 'Depth', 'InternalLinksDiscovered', 'EmbedCount', 'HtmlSnapshot', 'CrawlStatus'],
+  pages: ['SiteId', 'SiteName', 'SiteUrl', 'PageUrl', 'PageTitle', 'Depth', 'InternalLinksDiscovered', 'EmbedCount', 'CrawlStatus'],
   embeds: ['SiteId', 'SiteName', 'SiteUrl', 'PageUrl', 'PageTitle', 'Depth', 'ItemKind', 'ArtifactType', 'ArtifactUrl', 'AnchorText'],
   domains: ['SiteId', 'SiteName', 'PageUrl', 'ExternalDomain'],
 };
@@ -219,7 +219,7 @@ async function processSite(site, publishedMap, totalInRun) {
     appendRows('pages', [{
       SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: siteUrl,
       PageUrl: siteUrl, PageTitle: site.SiteName, Depth: 0,
-      InternalLinksDiscovered: 0, EmbedCount: 0, HtmlSnapshot: '',
+      InternalLinksDiscovered: 0, EmbedCount: 0,
       CrawlStatus: `API-Error: ${err.message}`
     }]);
     sitesProcessed++;
@@ -230,7 +230,7 @@ async function processSite(site, publishedMap, totalInRun) {
     appendRows('pages', [{
       SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: siteUrl,
       PageUrl: siteUrl, PageTitle: site.SiteName, Depth: 0,
-      InternalLinksDiscovered: 0, EmbedCount: 0, HtmlSnapshot: '', CrawlStatus: 'API-NoPagesFound'
+      InternalLinksDiscovered: 0, EmbedCount: 0, CrawlStatus: 'API-NoPagesFound'
     }]);
     sitesProcessed++;
     return;
@@ -287,7 +287,7 @@ async function processSite(site, publishedMap, totalInRun) {
       SiteId: site.SiteId, SiteName: site.SiteName, SiteUrl: siteUrl,
       PageUrl: pageUrl, PageTitle: pageTitle, Depth: pi === 0 ? 0 : 1,
       InternalLinksDiscovered: internalLinks, EmbedCount: embedCount,
-      HtmlSnapshot: '', CrawlStatus: 'API'
+      CrawlStatus: 'API'
     });
   }
 
