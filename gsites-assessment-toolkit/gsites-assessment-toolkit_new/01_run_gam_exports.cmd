@@ -77,11 +77,11 @@ if defined GAM_SITES_FILTER (
 if errorlevel 1 goto :fail
 
 echo [2/3] Detailed Google Sites inventory...
-"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,drivename,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks
+"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,drivename,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks,capabilities.canshare,capabilities.canedit,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,capabilities.candelete
 if errorlevel 1 goto :fail
 
 echo [3/3] Google Sites permissions and security...
-"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,webviewlink,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
+"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" showshareddrivepermissions fields id,name,webviewlink,driveid,drivename,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
 
 if errorlevel 1 goto :fail
 
