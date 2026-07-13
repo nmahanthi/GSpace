@@ -753,9 +753,15 @@ if (-not $SkipCrawl) {
                     $gcloudTimeoutSeconds = 25
                     Write-Info "Attempting to get token from gcloud (timeout: $gcloudTimeoutSeconds seconds)..."
 
+                    # gcloud is typically a .cmd shim on Windows (not a .exe), and
+                    # ProcessStartInfo/CreateProcess (UseShellExecute=false) cannot
+                    # launch .cmd/.bat files directly - only cmd.exe or PowerShell's
+                    # own command resolution can. Route through cmd.exe /c so this
+                    # works regardless of whether gcloud resolves to a .cmd, .bat,
+                    # or .exe.
                     $psi = New-Object System.Diagnostics.ProcessStartInfo
-                    $psi.FileName = $gcloudCheck.Source
-                    $psi.Arguments = 'auth print-access-token'
+                    $psi.FileName = 'cmd.exe'
+                    $psi.Arguments = '/c gcloud auth print-access-token'
                     $psi.RedirectStandardOutput = $true
                     $psi.RedirectStandardError = $true
                     $psi.UseShellExecute = $false
