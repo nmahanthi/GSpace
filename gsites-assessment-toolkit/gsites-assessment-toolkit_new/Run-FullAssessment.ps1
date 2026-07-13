@@ -116,6 +116,14 @@
 .PARAMETER ImpersonateEmail
     Workspace user/admin email to impersonate when minting a token via
     -ServiceAccountKeyPath. Defaults to -SitesAdminEmail if not provided.
+
+.PARAMETER SkipPublishedUrls
+    Skip Step 4A (Sites API published-URL lookup) entirely, e.g. when it
+    keeps failing with 403/scope/API-disabled errors that can't be resolved
+    quickly. Step 4B still runs normally - the Playwright crawler and the
+    Sites API v1 extractor both already fall back to each site's edit URL
+    (webViewLink) when no published-URL data is available, so results are
+    still produced, just using edit URLs instead of published ones.
 #>
 
 param(
@@ -133,6 +141,7 @@ param(
     [switch]$SkipBrowserAuth,
     [switch]$SkipCrawl,
     [switch]$SkipGrantAccess,
+    [switch]$SkipPublishedUrls,
 
     # Use Sites API v1 extractor instead of Playwright crawler for Step 4B
     [switch]$UseApiExtract,
@@ -730,7 +739,11 @@ if (-not $SkipCrawl -and -not $SkipGrantAccess) {
 # ============================================================================
 # STEP 4: GET PUBLISHED URLs (NEW)
 # ============================================================================
-if (-not $SkipCrawl) {
+if ($SkipPublishedUrls -and -not $SkipCrawl) {
+    Write-Step "STEP 4A: Get Published URLs from Sites API (SKIPPED)"
+    Write-Info "Step 4B will use each site's edit URL (webViewLink) instead."
+}
+elseif (-not $SkipCrawl) {
     Write-Step "STEP 4A: Get Published URLs from Sites API"
 
     $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'

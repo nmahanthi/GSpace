@@ -130,6 +130,27 @@ Use this instead of `gcloud` when Step 4A fails with a raw response containing
 
 ---
 
+## Step 4a — Last resort: skip published URLs entirely
+
+If Step 4A keeps failing even with Option A — for example the Sites API
+(`sites.googleapis.com`) is **disabled** in the GCP project behind GAM and you
+don't have `Owner`/`Editor`/`Service Usage Admin` rights to enable it, and no
+one else can enable it for you — you can skip Step 4A altogether:
+
+```powershell
+.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" `
+    -SitesAdminEmail "admin@yourcompany.com" `
+    -SkipPublishedUrls
+```
+
+Step 4B (crawling/extraction) still runs normally and automatically falls
+back to each site's **edit URL** (`webViewLink`, already collected during the
+GAM export) instead of its published URL. The assessment completes end to
+end; the only difference is that pages are fetched via their edit links
+rather than their public-facing published links.
+
+---
+
 ## Step 5 — Run the assessment
 
 Always pass `-PrimaryDomain` set to the customer's Google Workspace domain.  
