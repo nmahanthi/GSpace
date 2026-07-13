@@ -89,6 +89,45 @@ $token = (gcloud auth print-access-token).Trim()
 > ```
 > Skip this pre-grant step with `-SkipGrantAccess`.
 
+> ⚠️ **Still 403 with `ACCESS_TOKEN_SCOPE_INSUFFICIENT` after the grant above?**
+> That means the ACL is fine but the `gcloud` token itself doesn't carry Sites
+> API scope — `gcloud auth login`'s OAuth client can **never** be granted
+> `sites.readonly`, no matter how you re-authenticate. Use Option A instead:
+> reuse GAM's own service account (with domain-wide delegation) to mint a
+> token that does carry the right scope. See **Step 4a — Option A** below.
+
+---
+
+## Step 4a — Option A: Service-account token (fixes `ACCESS_TOKEN_SCOPE_INSUFFICIENT`)
+
+Use this instead of `gcloud` when Step 4A fails with a raw response containing
+`"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"`.
+
+1. **Locate GAM's service account key file**, usually named `oauth2service.json`,
+   next to `gam.exe` or in GAM's config directory (`%GAMCFGDIR%`, default `~\.gam`).
+   Open it and copy the `client_id` field.
+
+2. **Authorize the Sites scope for that Client ID** (one-time, admin-only):
+   Admin console → **Security → API controls → Domain-wide delegation** →
+   find/add the Client ID from step 1 → add this scope to its existing list
+   (don't remove the others GAM already uses):
+   ```
+   https://www.googleapis.com/auth/sites.readonly
+   ```
+
+3. **Run the assessment with `-ServiceAccountKeyPath` and `-ImpersonateEmail`**
+   instead of relying on `gcloud`:
+   ```powershell
+   .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" `
+       -SitesAdminEmail "admin@yourcompany.com" `
+       -ServiceAccountKeyPath "C:\path\to\oauth2service.json" `
+       -ImpersonateEmail "admin@yourcompany.com"
+   ```
+   `-ImpersonateEmail` defaults to `-SitesAdminEmail` if omitted. The toolkit
+   mints its own OAuth token (`get_service_account_token.js`) via domain-wide
+   delegation with `sites.readonly` + `drive.readonly` scope, bypassing
+   `gcloud` entirely for Step 4A.
+
 ---
 
 ## Step 5 — Run the assessment
@@ -183,6 +222,7 @@ user2@yourcompany.com
 | `.auth\state.json` | Regenerate by running `node 02_save_playwright_auth.js` | ✅ Yes (per user) |
 | `Run-FullAssessment.ps1` | Pass `-PrimaryDomain "yourcompany.com"` at runtime | ✅ Yes (parameter) |
 | `05_score_sites.ps1` | Pass `-PrimaryDomain "yourcompany.com"` if run directly | ✅ Yes (parameter) |
+| `Run-FullAssessment.ps1` | Pass `-ServiceAccountKeyPath` + `-ImpersonateEmail` if `gcloud` tokens hit `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | Only if needed (Option A) |
 
 **No other files need to be edited.** All paths, tokens, output directories, and batch sizes are resolved dynamically.
 

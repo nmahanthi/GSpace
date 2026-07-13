@@ -101,6 +101,21 @@
 
 .PARAMETER SkipGrantAccess
     Skip the bulk Drive-access grant step that normally runs before Step 4A.
+
+.PARAMETER ServiceAccountKeyPath
+    Path to a service account key JSON file (e.g. GAM's oauth2service.json)
+    authorized for domain-wide delegation. When provided (or auto-detected
+    next to gam.exe / GAMCFGDIR / the toolkit folder), the toolkit mints its
+    own OAuth token with the sites.readonly + drive.readonly scopes by
+    impersonating -ImpersonateEmail, instead of using `gcloud auth
+    print-access-token`. This is required because gcloud's own OAuth client
+    can never be granted Sites API scopes. The service account's Client ID
+    must first be authorized for these scopes in Admin Console > Security >
+    API controls > Domain-wide delegation.
+
+.PARAMETER ImpersonateEmail
+    Workspace user/admin email to impersonate when minting a token via
+    -ServiceAccountKeyPath. Defaults to -SitesAdminEmail if not provided.
 #>
 
 param(
@@ -134,7 +149,11 @@ param(
     [string]$TargetUsersCsv,
 
     # Account that will call the Sites API - gets bulk-granted Reader access
-    [string]$SitesAdminEmail
+    [string]$SitesAdminEmail,
+
+    # Service-account-based token minting (Option A fix for scope-limited gcloud tokens)
+    [string]$ServiceAccountKeyPath,
+    [string]$ImpersonateEmail
 )
 
 Set-StrictMode -Version Latest
@@ -734,6 +753,42 @@ if (-not $SkipCrawl) {
             $sitesApiToken = $AccessToken
             $tokenAvailable = $true
             Write-Success "Using provided access token"
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($ServiceAccountKeyPath)) {
+            # Option A fix: mint a token via domain-wide delegation using a
+            # service account key (e.g. GAM's oauth2service.json), which can
+            # be authorized for the sites.readonly scope. gcloud's own OAuth
+            # client can never be granted that scope, no matter how it is
+            # re-authenticated - see GAM_PATH_FIX.md / CUSTOMER_SETUP.md.
+            $impersonate = if (-not [string]::IsNullOrWhiteSpace($ImpersonateEmail)) { $ImpersonateEmail } else { $SitesAdminEmail }
+
+            if ([string]::IsNullOrWhiteSpace($impersonate)) {
+                Write-Info "ServiceAccountKeyPath was provided but no -ImpersonateEmail or -SitesAdminEmail was given."
+                Write-Info "Skipping token minting - cannot impersonate without a target email."
+            }
+            elseif (-not (Test-Path $ServiceAccountKeyPath)) {
+                Write-Info "Service account key file not found: $ServiceAccountKeyPath"
+            }
+            else {
+                Write-Info "Minting Sites API token via service account (impersonating $impersonate)..."
+                $tokenScript = Join-Path $ScriptDir 'get_service_account_token.js'
+                Push-Location $ScriptDir
+                $saTokenOutput = & node $tokenScript $ServiceAccountKeyPath $impersonate 2>&1
+                $saTokenExit = $LASTEXITCODE
+                Pop-Location
+
+                if ($saTokenExit -eq 0 -and $saTokenOutput -match '^ya29\.') {
+                    $sitesApiToken = ([string]$saTokenOutput).Trim()
+                    $tokenAvailable = $true
+                    Write-Success "Access token obtained via service account (domain-wide delegation)"
+                }
+                else {
+                    Write-Info "Service account token minting failed:"
+                    ($saTokenOutput | Out-String) -split "`n" | ForEach-Object {
+                        if ($_.Trim()) { Write-Info "  $_" }
+                    }
+                }
+            }
         }
         else {
             Write-Info "No access token provided, checking for gcloud CLI..."
