@@ -5,7 +5,6 @@ const { parse } = require('csv-parse/sync');
 const { stringify } = require('csv-stringify/sync');
 
 const inputCsv = process.argv[2] || path.resolve(__dirname, 'output', 'GSites_Inventory_Detailed.csv');
-const publishedUrlsCsv = path.resolve(__dirname, 'output', 'Sites_Published_URLs.csv');
 const outputDir = path.resolve(__dirname, 'output');
 const authFile = path.resolve(__dirname, '.auth', 'state.json');
 const maxPagesPerSite = Number(process.argv[3] || process.env.MAX_PAGES_PER_SITE || 200);
@@ -85,45 +84,17 @@ function sameHost(candidate, rootUrl) {
 (async () => {
   fs.mkdirSync(outputDir, { recursive: true });
 
-  // Read sites from main inventory
-  const sitesData = readCsv(inputCsv).map(r => ({
-    SiteId: firstValue(r, ['id', 'SiteId']),
-    SiteName: firstValue(r, ['name', 'SiteName']),
-    EditUrl: firstValue(r, ['webviewlink', 'webViewLink', 'alternateLink'])
-  })).filter(r => r.SiteId && r.EditUrl);
-
-  // Try to load published URLs if available
-  let publishedUrlsMap = new Map();
-  if (fs.existsSync(publishedUrlsCsv)) {
-    console.log('Loading published URLs from:', publishedUrlsCsv);
-    const publishedData = readCsv(publishedUrlsCsv);
-    for (const row of publishedData) {
-      const siteId = firstValue(row, ['SiteId', 'id']);
-      const publishedUrl = firstValue(row, ['PublishedUrl', 'publishedUrl']);
-      if (siteId && publishedUrl) {
-        publishedUrlsMap.set(siteId, publishedUrl);
-      }
-    }
-    console.log(`Loaded ${publishedUrlsMap.size} published URLs`);
-  } else {
-    console.log('⚠️  Published URLs file not found:', publishedUrlsCsv);
-    console.log('⚠️  Will attempt to crawl using edit URLs (may result in 403 errors)');
-    console.log('⚠️  Run: node 03a_get_published_urls.js <access_token> to get published URLs');
-  }
-
-  // Merge published URLs with site data
-  let sites = sitesData.map(site => {
-    const publishedUrl = publishedUrlsMap.get(site.SiteId);
+  // Read sites from main inventory - use each site's edit URL (webViewLink)
+  let sites = readCsv(inputCsv).map(r => {
+    const editUrl = firstValue(r, ['webviewlink', 'webViewLink', 'alternateLink']);
     return {
-      SiteId: site.SiteId,
-      SiteName: site.SiteName,
-      EditUrl: site.EditUrl,
-      PublishedUrl: publishedUrl || null,
-      // Use published URL if available, otherwise fall back to edit URL
-      SiteUrl: publishedUrl || site.EditUrl,
-      UrlType: publishedUrl ? 'Published' : 'Edit'
+      SiteId: firstValue(r, ['id', 'SiteId']),
+      SiteName: firstValue(r, ['name', 'SiteName']),
+      EditUrl: editUrl,
+      SiteUrl: editUrl,
+      UrlType: 'Edit'
     };
-  });
+  }).filter(r => r.SiteId && r.EditUrl);
 
   // Apply batching: skip the first siteOffset sites, then take at most maxSites
   const totalSites = sites.length;

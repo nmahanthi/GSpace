@@ -7,7 +7,6 @@
  *
  * Requires: GCP_ACCESS_TOKEN env var (scope: sites.readonly)
  * Input:    output/GSites_Inventory_Detailed.csv
- *           output/Sites_Published_URLs.csv   (optional)
  * Output:   output/Pages.csv
  *           output/Embeds.csv
  *           output/ExternalDomains.csv
@@ -20,7 +19,6 @@ const { parse } = require('csv-parse/sync');
 const { stringify } = require('csv-stringify/sync');
 
 const inputCsv = path.resolve(__dirname, 'output', 'GSites_Inventory_Detailed.csv');
-const publishedUrlsCsv = path.resolve(__dirname, 'output', 'Sites_Published_URLs.csv');
 const outputDir = path.resolve(__dirname, 'output');
 const accessToken = process.env.GCP_ACCESS_TOKEN || process.argv[2];
 const maxSites = Number(process.env.MAX_SITES || 0);   // 0 = all
@@ -209,8 +207,8 @@ function walkElement(node, results) {
 // Writes its results straight to disk — no global arrays, no memory pressure.
 let sitesProcessed = 0;
 
-async function processSite(site, publishedMap, totalInRun) {
-  const siteUrl = publishedMap.get(site.SiteId) || site.EditUrl;
+async function processSite(site, totalInRun) {
+  const siteUrl = site.EditUrl;
 
   let pages = [];
   try {
@@ -315,17 +313,6 @@ async function processSite(site, publishedMap, totalInRun) {
     EditUrl: r.webViewLink || r.webviewlink || ''
   })).filter(r => r.SiteId);
 
-  // Load published URL map (preferred over edit URLs)
-  const publishedMap = new Map();
-  if (fs.existsSync(publishedUrlsCsv)) {
-    for (const row of readCsv(publishedUrlsCsv)) {
-      const id = row.SiteId || row.id || '';
-      const url = row.PublishedUrl || row.publishedUrl || '';
-      if (id && url) publishedMap.set(id, url);
-    }
-    console.log(`Loaded ${publishedMap.size} published URLs`);
-  }
-
   // Apply offset / batch limit (same contract as 03_crawl_sites.js)
   const totalSites = sitesData.length;
   if (siteOffset > 0 || maxSites > 0) {
@@ -344,7 +331,7 @@ async function processSite(site, publishedMap, totalInRun) {
   initOutputFiles();
 
   const startTime = Date.now();
-  await runConcurrent(sitesData, CONCURRENCY, site => processSite(site, publishedMap, sitesData.length));
+  await runConcurrent(sitesData, CONCURRENCY, site => processSite(site, sitesData.length));
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
 
   console.log('\n========================================');

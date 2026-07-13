@@ -11,7 +11,7 @@ This document describes every change a customer must make before running the too
 | [GAM](https://github.com/GAM-team/GAM) | 7.x | Google Workspace Admin API export |
 | [Node.js](https://nodejs.org/) | 18 or later | Site crawling and API extraction scripts |
 | [PowerShell](https://github.com/PowerShell/PowerShell) | 7.x (`pwsh`) | Orchestrator and scoring scripts |
-| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | Any | OAuth token for the Sites API (published URLs) |
+| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | Any | OAuth token for the Sites API v1 (`-UseApiExtract` mode only) |
 
 ---
 
@@ -63,91 +63,18 @@ This saves credentials to `.auth\state.json`.
 
 ---
 
-## Step 4 — Authenticate with gcloud (API token)
+## Step 4 — (Optional) Authenticate with gcloud (API token)
 
-Required for Step 4A (published URLs).
+Only required if you want to use the fast Sites API v1 extractor
+(`-UseApiExtract`) instead of the default Playwright browser crawler. Site
+crawling always uses each site's **edit URL** (`webViewLink`, already
+collected during the GAM export).
 
 ```powershell
 gcloud auth login
-```
-
-The toolkit retrieves the token automatically from gcloud on each run.  
-To pass the token explicitly:
-
-```powershell
 $token = (gcloud auth print-access-token).Trim()
-.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -AccessToken $token
+.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SkipGAMExport -SkipBrowserAuth -UseApiExtract -AccessToken $token
 ```
-
-> ⚠️ **403 Forbidden on Step 4A?** The Sites API v1 requires the calling account to
-> have explicit Drive-level Viewer access to each site — being a Workspace super
-> admin is not enough. Pass `-SitesAdminEmail` (the email you used for
-> `gcloud auth login`) and the toolkit will use GAM's elevated access to grant
-> that account Reader access to every site before Step 4A runs:
-> ```powershell
-> .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SitesAdminEmail "admin@yourcompany.com"
-> ```
-> Skip this pre-grant step with `-SkipGrantAccess`.
-
-> ⚠️ **Still 403 with `ACCESS_TOKEN_SCOPE_INSUFFICIENT` after the grant above?**
-> That means the ACL is fine but the `gcloud` token itself doesn't carry Sites
-> API scope — `gcloud auth login`'s OAuth client can **never** be granted
-> `sites.readonly`, no matter how you re-authenticate. Use Option A instead:
-> reuse GAM's own service account (with domain-wide delegation) to mint a
-> token that does carry the right scope. See **Step 4a — Option A** below.
-
----
-
-## Step 4a — Option A: Service-account token (fixes `ACCESS_TOKEN_SCOPE_INSUFFICIENT`)
-
-Use this instead of `gcloud` when Step 4A fails with a raw response containing
-`"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"`.
-
-1. **Locate GAM's service account key file**, usually named `oauth2service.json`,
-   next to `gam.exe` or in GAM's config directory (`%GAMCFGDIR%`, default `~\.gam`).
-   Open it and copy the `client_id` field.
-
-2. **Authorize the Sites scope for that Client ID** (one-time, admin-only):
-   Admin console → **Security → API controls → Domain-wide delegation** →
-   find/add the Client ID from step 1 → add this scope to its existing list
-   (don't remove the others GAM already uses):
-   ```
-   https://www.googleapis.com/auth/sites.readonly
-   ```
-
-3. **Run the assessment with `-ServiceAccountKeyPath` and `-ImpersonateEmail`**
-   instead of relying on `gcloud`:
-   ```powershell
-   .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" `
-       -SitesAdminEmail "admin@yourcompany.com" `
-       -ServiceAccountKeyPath "C:\path\to\oauth2service.json" `
-       -ImpersonateEmail "admin@yourcompany.com"
-   ```
-   `-ImpersonateEmail` defaults to `-SitesAdminEmail` if omitted. The toolkit
-   mints its own OAuth token (`get_service_account_token.js`) via domain-wide
-   delegation with `sites.readonly` + `drive.readonly` scope, bypassing
-   `gcloud` entirely for Step 4A.
-
----
-
-## Step 4a — Last resort: skip published URLs entirely
-
-If Step 4A keeps failing even with Option A — for example the Sites API
-(`sites.googleapis.com`) is **disabled** in the GCP project behind GAM and you
-don't have `Owner`/`Editor`/`Service Usage Admin` rights to enable it, and no
-one else can enable it for you — you can skip Step 4A altogether:
-
-```powershell
-.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" `
-    -SitesAdminEmail "admin@yourcompany.com" `
-    -SkipPublishedUrls
-```
-
-Step 4B (crawling/extraction) still runs normally and automatically falls
-back to each site's **edit URL** (`webViewLink`, already collected during the
-GAM export) instead of its published URL. The assessment completes end to
-end; the only difference is that pages are fetched via their edit links
-rather than their public-facing published links.
 
 ---
 
@@ -243,7 +170,6 @@ user2@yourcompany.com
 | `.auth\state.json` | Regenerate by running `node 02_save_playwright_auth.js` | ✅ Yes (per user) |
 | `Run-FullAssessment.ps1` | Pass `-PrimaryDomain "yourcompany.com"` at runtime | ✅ Yes (parameter) |
 | `05_score_sites.ps1` | Pass `-PrimaryDomain "yourcompany.com"` if run directly | ✅ Yes (parameter) |
-| `Run-FullAssessment.ps1` | Pass `-ServiceAccountKeyPath` + `-ImpersonateEmail` if `gcloud` tokens hit `ACCESS_TOKEN_SCOPE_INSUFFICIENT` | Only if needed (Option A) |
 
 **No other files need to be edited.** All paths, tokens, output directories, and batch sizes are resolved dynamically.
 

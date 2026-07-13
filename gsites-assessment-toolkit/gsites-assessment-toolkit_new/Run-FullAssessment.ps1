@@ -90,40 +90,6 @@
     re-running GAM. The file will be copied into the output/ folder so all
     downstream scripts can find it.
 
-.PARAMETER SitesAdminEmail
-    Email address of the account that will call the Sites API in Step 4A
-    (i.e. the account used for "gcloud auth login" / -AccessToken). Before
-    Step 4A runs, the toolkit uses GAM's elevated access to grant this
-    account Reader access to every site in the inventory. This is required
-    because the Sites API v1 rejects requests from accounts - even domain
-    admins - that lack explicit Drive-level access to the file. If omitted,
-    this pre-grant step is skipped and Step 4A may return 403 errors.
-
-.PARAMETER SkipGrantAccess
-    Skip the bulk Drive-access grant step that normally runs before Step 4A.
-
-.PARAMETER ServiceAccountKeyPath
-    Path to a service account key JSON file (e.g. GAM's oauth2service.json)
-    authorized for domain-wide delegation. When provided (or auto-detected
-    next to gam.exe / GAMCFGDIR / the toolkit folder), the toolkit mints its
-    own OAuth token with the sites.readonly + drive.readonly scopes by
-    impersonating -ImpersonateEmail, instead of using `gcloud auth
-    print-access-token`. This is required because gcloud's own OAuth client
-    can never be granted Sites API scopes. The service account's Client ID
-    must first be authorized for these scopes in Admin Console > Security >
-    API controls > Domain-wide delegation.
-
-.PARAMETER ImpersonateEmail
-    Workspace user/admin email to impersonate when minting a token via
-    -ServiceAccountKeyPath. Defaults to -SitesAdminEmail if not provided.
-
-.PARAMETER SkipPublishedUrls
-    Skip Step 4A (Sites API published-URL lookup) entirely, e.g. when it
-    keeps failing with 403/scope/API-disabled errors that can't be resolved
-    quickly. Step 4B still runs normally - the Playwright crawler and the
-    Sites API v1 extractor both already fall back to each site's edit URL
-    (webViewLink) when no published-URL data is available, so results are
-    still produced, just using edit URLs instead of published ones.
 #>
 
 param(
@@ -140,10 +106,8 @@ param(
     [switch]$SkipGAMExport,
     [switch]$SkipBrowserAuth,
     [switch]$SkipCrawl,
-    [switch]$SkipGrantAccess,
-    [switch]$SkipPublishedUrls,
 
-    # Use Sites API v1 extractor instead of Playwright crawler for Step 4B
+    # Use Sites API v1 extractor instead of Playwright crawler for Step 4
     [switch]$UseApiExtract,
 
     [string]$AccessToken,
@@ -155,14 +119,7 @@ param(
     [string]$InventoryCsv,
 
     # Filter to a specific list of target users
-    [string]$TargetUsersCsv,
-
-    # Account that will call the Sites API - gets bulk-granted Reader access
-    [string]$SitesAdminEmail,
-
-    # Service-account-based token minting (Option A fix for scope-limited gcloud tokens)
-    [string]$ServiceAccountKeyPath,
-    [string]$ImpersonateEmail
+    [string]$TargetUsersCsv
 )
 
 Set-StrictMode -Version Latest
@@ -282,18 +239,6 @@ function Filter-InventoryBySelectedSites {
 
     $filtered | Export-Csv -NoTypeInformation -Path $InventoryPath
     Write-Success "Filtered inventory written to $(Split-Path $InventoryPath -Leaf) ($($filtered.Count) sites)"
-
-    # Also filter published URLs if they exist to avoid unnecessary API calls
-    $publishedUrlsPath = Join-Path (Split-Path $InventoryPath) 'Sites_Published_URLs.csv'
-    if (Test-Path $publishedUrlsPath) {
-        $published = @(Import-Csv $publishedUrlsPath)
-        $filteredPublished = @($published | Where-Object {
-            $name = Get-SafeProperty -InputObject $_ -PropertyNames @('SiteName', 'name')
-            $selectedNames.Contains([string]$name)
-        })
-        $filteredPublished | Export-Csv -NoTypeInformation -Path $publishedUrlsPath
-        Write-Success "Filtered published URLs to $($filteredPublished.Count) site(s)"
-    }
 
     # Also filter permissions if they exist to keep scoring consistent
     $permissionsPath = Join-Path (Split-Path $InventoryPath) 'GSites_Permissions.csv'
@@ -697,238 +642,10 @@ else {
 }
 
 # ============================================================================
-# STEP 3.5: GRANT SITES API ACCESS (Option B fix for Step 4A 403 errors)
-# ============================================================================
-if (-not $SkipCrawl -and -not $SkipGrantAccess) {
-    if ([string]::IsNullOrWhiteSpace($SitesAdminEmail)) {
-        Write-Step "STEP 3.5: Grant Sites API Access (SKIPPED - no -SitesAdminEmail provided)"
-        Write-Info "Step 4A may fail with 403 Forbidden unless the calling account already"
-        Write-Info "has Drive-level access to every site. Pass -SitesAdminEmail to fix this."
-    }
-    else {
-        Write-Step "STEP 3.5: Grant Sites API Access"
-
-        $grantScript = Join-Path $ScriptDir '01b_grant_site_access.cmd'
-        if (-not (Test-Path $grantScript)) {
-            throw "Grant access script not found: $grantScript"
-        }
-
-        $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'
-        if (-not (Test-Path $inventoryFile)) {
-            throw "Inventory file not found: $inventoryFile. Run GAM export first."
-        }
-
-        Write-Info "Granting $SitesAdminEmail Reader access to all sites via GAM (Option B fix for 403 errors)..."
-        [Environment]::SetEnvironmentVariable('SITES_ADMIN_EMAIL', $SitesAdminEmail, 'Process')
-
-        $grantResult = Invoke-LoggedProcess -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$grantScript`"") -WorkingDirectory $ScriptDir -LogPrefix '01b_grant_access'
-
-        if ($grantResult.ExitCode -ne 0) {
-            Write-Error-Custom "Grant access step failed with exit code $($grantResult.ExitCode)"
-            Write-LogTail -Path $grantResult.StdErrLog -Label 'Grant access stderr tail (last 20 lines)' -Color Red
-            Write-LogTail -Path $grantResult.StdOutLog -Label 'Grant access stdout tail (last 20 lines)' -Color Gray
-            Write-Info "Continuing anyway - Step 4A will report any remaining 403 errors per-site."
-        }
-        else {
-            Write-Success "Access grant step completed"
-            Write-Info "  Logs saved to: $LogsDir"
-        }
-    }
-}
-
-# ============================================================================
-# STEP 4: GET PUBLISHED URLs (NEW)
-# ============================================================================
-if ($SkipPublishedUrls -and -not $SkipCrawl) {
-    Write-Step "STEP 4A: Get Published URLs from Sites API (SKIPPED)"
-    Write-Info "Step 4B will use each site's edit URL (webViewLink) instead."
-}
-elseif (-not $SkipCrawl) {
-    Write-Step "STEP 4A: Get Published URLs from Sites API"
-
-    $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'
-    if (-not (Test-Path $inventoryFile)) {
-        throw "Inventory file not found: $inventoryFile. Run GAM export first."
-    }
-
-    $siteCount = @(Import-Csv $inventoryFile).Count
-    Write-Info "Found $siteCount sites"
-
-    if ($siteCount -eq 0) {
-        Write-Info "No sites found - skipping published URL retrieval"
-    }
-    else {
-        # Try to get OAuth token for Sites API
-        $tokenAvailable = $false
-        $sitesApiToken = $null
-
-        if (-not [string]::IsNullOrWhiteSpace($AccessToken)) {
-            $sitesApiToken = $AccessToken
-            $tokenAvailable = $true
-            Write-Success "Using provided access token"
-        }
-        elseif (-not [string]::IsNullOrWhiteSpace($ServiceAccountKeyPath)) {
-            # Option A fix: mint a token via domain-wide delegation using a
-            # service account key (e.g. GAM's oauth2service.json), which can
-            # be authorized for the sites.readonly scope. gcloud's own OAuth
-            # client can never be granted that scope, no matter how it is
-            # re-authenticated - see GAM_PATH_FIX.md / CUSTOMER_SETUP.md.
-            $impersonate = if (-not [string]::IsNullOrWhiteSpace($ImpersonateEmail)) { $ImpersonateEmail } else { $SitesAdminEmail }
-
-            if ([string]::IsNullOrWhiteSpace($impersonate)) {
-                Write-Info "ServiceAccountKeyPath was provided but no -ImpersonateEmail or -SitesAdminEmail was given."
-                Write-Info "Skipping token minting - cannot impersonate without a target email."
-            }
-            elseif (-not (Test-Path $ServiceAccountKeyPath)) {
-                Write-Info "Service account key file not found: $ServiceAccountKeyPath"
-            }
-            else {
-                Write-Info "Minting Sites API token via service account (impersonating $impersonate)..."
-                $tokenScript = Join-Path $ScriptDir 'get_service_account_token.js'
-                Push-Location $ScriptDir
-                $saTokenOutput = & node $tokenScript $ServiceAccountKeyPath $impersonate 2>&1
-                $saTokenExit = $LASTEXITCODE
-                Pop-Location
-
-                if ($saTokenExit -eq 0 -and $saTokenOutput -match '^ya29\.') {
-                    $sitesApiToken = ([string]$saTokenOutput).Trim()
-                    $tokenAvailable = $true
-                    Write-Success "Access token obtained via service account (domain-wide delegation)"
-                }
-                else {
-                    Write-Info "Service account token minting failed:"
-                    ($saTokenOutput | Out-String) -split "`n" | ForEach-Object {
-                        if ($_.Trim()) { Write-Info "  $_" }
-                    }
-                }
-            }
-        }
-        else {
-            Write-Info "No access token provided, checking for gcloud CLI..."
-            try {
-                $gcloudCheck = Get-Command gcloud -ErrorAction SilentlyContinue
-                if ($null -eq $gcloudCheck) {
-                    Write-Info "gcloud CLI not found in PATH"
-                }
-                else {
-                    # Call gcloud directly via .NET Process instead of Start-Job.
-                    # Start-Job spins up a brand-new PowerShell host just to run gcloud,
-                    # which alone can take longer than the old 5s timeout on a loaded
-                    # machine / VPN, causing this step to be silently skipped and
-                    # Sites_Published_URLs.csv to never be written. Process.WaitForExit
-                    # gives an accurate timeout on the gcloud call itself with no extra
-                    # host-spin-up overhead.
-                    $gcloudTimeoutSeconds = 25
-                    Write-Info "Attempting to get token from gcloud (timeout: $gcloudTimeoutSeconds seconds)..."
-
-                    # gcloud is typically a .cmd shim on Windows (not a .exe), and
-                    # ProcessStartInfo/CreateProcess (UseShellExecute=false) cannot
-                    # launch .cmd/.bat files directly - only cmd.exe or PowerShell's
-                    # own command resolution can. Route through cmd.exe /c so this
-                    # works regardless of whether gcloud resolves to a .cmd, .bat,
-                    # or .exe.
-                    $psi = New-Object System.Diagnostics.ProcessStartInfo
-                    $psi.FileName = 'cmd.exe'
-                    $psi.Arguments = '/c gcloud auth print-access-token'
-                    $psi.RedirectStandardOutput = $true
-                    $psi.RedirectStandardError = $true
-                    $psi.UseShellExecute = $false
-                    $psi.CreateNoWindow = $true
-
-                    $proc = New-Object System.Diagnostics.Process
-                    $proc.StartInfo = $psi
-                    $proc.Start() | Out-Null
-
-                    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-                    $stderrTask = $proc.StandardError.ReadToEndAsync()
-
-                    if ($proc.WaitForExit($gcloudTimeoutSeconds * 1000)) {
-                        $stdout = $stdoutTask.GetAwaiter().GetResult()
-                        $stderr = $stderrTask.GetAwaiter().GetResult()
-                        # Trim removes all \r\n that gcloud appends to its output.
-                        # Without this the Bearer header becomes "Bearer ya29.xxx\r\n" -> HTTP 401.
-                        $sitesApiToken = ($stdout + $stderr).Trim()
-
-                        if ($sitesApiToken -match '^ya29\.' -and $sitesApiToken.Length -gt 20) {
-                            Write-Success "Access token obtained from gcloud"
-                            $tokenAvailable = $true
-                        }
-                        elseif ($sitesApiToken -match 'ERROR') {
-                            Write-Info "gcloud auth not configured or expired - run: gcloud auth login"
-                        }
-                        else {
-                            Write-Info "Unexpected gcloud output - could not extract token"
-                        }
-                    }
-                    else {
-                        Write-Info "gcloud command timed out (>$gcloudTimeoutSeconds s)"
-                        try { $proc.Kill() } catch {}
-                    }
-                }
-            }
-            catch {
-                Write-Info "Could not get access token from gcloud: $_"
-            }
-        }
-
-        if ($tokenAvailable) {
-            Write-Info "Fetching published URLs from Sites API..."
-            $publishedUrlScript = Join-Path $ScriptDir '03a_get_published_urls.js'
-            Push-Location $ScriptDir
-            $env:GCP_ACCESS_TOKEN = $sitesApiToken
-            & node $publishedUrlScript
-            Pop-Location
-
-            $publishedUrlsFile = Join-Path $OutputDir 'Sites_Published_URLs.csv'
-            if (Test-Path $publishedUrlsFile) {
-                $publishedData = @(Import-Csv $publishedUrlsFile | Where-Object { $_.PublishedUrl -and $_.PublishedUrl -ne '' })
-                $publishedCount = $publishedData.Count
-                Write-Success "Published URLs retrieved: $publishedCount of $siteCount sites"
-                Write-Info "  Output: Sites_Published_URLs.csv"
-
-                if ($publishedCount -eq 0) {
-                    Write-Host ""
-                    Write-Host "========================================" -ForegroundColor Yellow
-                    Write-Host "  OAuth Scope Issue Detected" -ForegroundColor Yellow
-                    Write-Host "========================================" -ForegroundColor Yellow
-                    Write-Host ""
-                    Write-Host "The access token doesn't have Sites API scope." -ForegroundColor Gray
-                    Write-Host "Re-authenticate with the correct scope:" -ForegroundColor Yellow
-                    Write-Host ""
-                    Write-Host "  gcloud auth login" -ForegroundColor White
-                    Write-Host ""
-                    Write-Host "Then re-run the assessment." -ForegroundColor Gray
-                    Write-Host ""
-                }
-            }
-            else {
-                Write-Info "Published URLs file not created - Sites API may have failed"
-            }
-        }
-        else {
-            Write-Host ""
-            Write-Host "========================================" -ForegroundColor Yellow
-            Write-Host "  Published URLs Not Retrieved" -ForegroundColor Yellow
-            Write-Host "========================================" -ForegroundColor Yellow
-            Write-Host ""
-            Write-Host "No OAuth token available for Sites API." -ForegroundColor Gray
-            Write-Host "The crawler will attempt to use edit URLs, which may result in 403 errors." -ForegroundColor Gray
-            Write-Host ""
-            Write-Host "To get published URLs, provide an OAuth token:" -ForegroundColor Yellow
-            Write-Host "  gcloud auth login" -ForegroundColor White
-            Write-Host "  .\\Run-FullAssessment.ps1 -PrimaryDomain 'rocheua.com'" -ForegroundColor White
-            Write-Host ""
-            Write-Info "Continuing with crawl using edit URLs..."
-            Write-Host ""
-        }
-    }
-}
-
-# ============================================================================
-# STEP 4B: SITE CRAWLING
+# STEP 4: SITE CRAWLING
 # ============================================================================
 if (-not $SkipCrawl) {
-    Write-Step "STEP 4B: Site Crawling with Playwright"
+    Write-Step "STEP 4: Site Crawling with Playwright"
 
     $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'
     $siteCount = @(Import-Csv $inventoryFile).Count
@@ -1008,7 +725,7 @@ if (-not $SkipCrawl) {
     }
 }
 else {
-    Write-Step "STEP 4: Get Published URLs & Site Crawling (SKIPPED)"
+    Write-Step "STEP 4: Site Crawling (SKIPPED)"
 }
 
 # ============================================================================
