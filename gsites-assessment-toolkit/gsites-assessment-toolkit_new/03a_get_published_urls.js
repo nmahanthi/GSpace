@@ -71,12 +71,14 @@ function httpsGet(url, headers) {
             `https://www.googleapis.com/auth/drive.readonly\n` +
             `  Fix option 2 (pass a fresh token directly):\n` +
             `    $token = gcloud auth print-access-token\n` +
-            `    .\\Run-FullAssessment.ps1 -PrimaryDomain "..." -AccessToken $token`
+            `    .\\Run-FullAssessment.ps1 -PrimaryDomain "..." -AccessToken $token\n` +
+            `  Raw response: ${data}`
           ));
         } else if (res.statusCode === 403) {
           reject(new Error(
             `HTTP 403 FORBIDDEN — token is valid but account lacks access to this site.\n` +
-            `  Ensure the authenticated account is a domain admin or site owner.`
+            `  Ensure the authenticated account is a domain admin or site owner.\n` +
+            `  Raw response: ${data}`
           ));
         } else {
           reject(new Error(`HTTP ${res.statusCode}: ${data}`));
