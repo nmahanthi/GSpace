@@ -89,6 +89,18 @@
     already have the inventory from a previous GAM export and want to skip
     re-running GAM. The file will be copied into the output/ folder so all
     downstream scripts can find it.
+
+.PARAMETER SitesAdminEmail
+    Email address of the account that will call the Sites API in Step 4A
+    (i.e. the account used for "gcloud auth login" / -AccessToken). Before
+    Step 4A runs, the toolkit uses GAM's elevated access to grant this
+    account Reader access to every site in the inventory. This is required
+    because the Sites API v1 rejects requests from accounts - even domain
+    admins - that lack explicit Drive-level access to the file. If omitted,
+    this pre-grant step is skipped and Step 4A may return 403 errors.
+
+.PARAMETER SkipGrantAccess
+    Skip the bulk Drive-access grant step that normally runs before Step 4A.
 #>
 
 param(
@@ -105,6 +117,7 @@ param(
     [switch]$SkipGAMExport,
     [switch]$SkipBrowserAuth,
     [switch]$SkipCrawl,
+    [switch]$SkipGrantAccess,
 
     # Use Sites API v1 extractor instead of Playwright crawler for Step 4B
     [switch]$UseApiExtract,
@@ -118,7 +131,10 @@ param(
     [string]$InventoryCsv,
 
     # Filter to a specific list of target users
-    [string]$TargetUsersCsv
+    [string]$TargetUsersCsv,
+
+    # Account that will call the Sites API - gets bulk-granted Reader access
+    [string]$SitesAdminEmail
 )
 
 Set-StrictMode -Version Latest
@@ -649,6 +665,46 @@ else {
     if (-not (Test-Path $AuthFile)) {
         Write-Error-Custom "Authentication file not found: $AuthFile"
         throw "Cannot skip browser authentication - no existing auth file found"
+    }
+}
+
+# ============================================================================
+# STEP 3.5: GRANT SITES API ACCESS (Option B fix for Step 4A 403 errors)
+# ============================================================================
+if (-not $SkipCrawl -and -not $SkipGrantAccess) {
+    if ([string]::IsNullOrWhiteSpace($SitesAdminEmail)) {
+        Write-Step "STEP 3.5: Grant Sites API Access (SKIPPED - no -SitesAdminEmail provided)"
+        Write-Info "Step 4A may fail with 403 Forbidden unless the calling account already"
+        Write-Info "has Drive-level access to every site. Pass -SitesAdminEmail to fix this."
+    }
+    else {
+        Write-Step "STEP 3.5: Grant Sites API Access"
+
+        $grantScript = Join-Path $ScriptDir '01b_grant_site_access.cmd'
+        if (-not (Test-Path $grantScript)) {
+            throw "Grant access script not found: $grantScript"
+        }
+
+        $inventoryFile = Join-Path $OutputDir 'GSites_Inventory_Detailed.csv'
+        if (-not (Test-Path $inventoryFile)) {
+            throw "Inventory file not found: $inventoryFile. Run GAM export first."
+        }
+
+        Write-Info "Granting $SitesAdminEmail Reader access to all sites via GAM (Option B fix for 403 errors)..."
+        [Environment]::SetEnvironmentVariable('SITES_ADMIN_EMAIL', $SitesAdminEmail, 'Process')
+
+        $grantResult = Invoke-LoggedProcess -FilePath 'cmd.exe' -ArgumentList @('/c', "`"$grantScript`"") -WorkingDirectory $ScriptDir -LogPrefix '01b_grant_access'
+
+        if ($grantResult.ExitCode -ne 0) {
+            Write-Error-Custom "Grant access step failed with exit code $($grantResult.ExitCode)"
+            Write-LogTail -Path $grantResult.StdErrLog -Label 'Grant access stderr tail (last 20 lines)' -Color Red
+            Write-LogTail -Path $grantResult.StdOutLog -Label 'Grant access stdout tail (last 20 lines)' -Color Gray
+            Write-Info "Continuing anyway - Step 4A will report any remaining 403 errors per-site."
+        }
+        else {
+            Write-Success "Access grant step completed"
+            Write-Info "  Logs saved to: $LogsDir"
+        }
     }
 }
 

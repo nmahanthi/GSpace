@@ -79,6 +79,16 @@ $token = (gcloud auth print-access-token).Trim()
 .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -AccessToken $token
 ```
 
+> ⚠️ **403 Forbidden on Step 4A?** The Sites API v1 requires the calling account to
+> have explicit Drive-level Viewer access to each site — being a Workspace super
+> admin is not enough. Pass `-SitesAdminEmail` (the email you used for
+> `gcloud auth login`) and the toolkit will use GAM's elevated access to grant
+> that account Reader access to every site before Step 4A runs:
+> ```powershell
+> .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -SitesAdminEmail "admin@yourcompany.com"
+> ```
+> Skip this pre-grant step with `-SkipGrantAccess`.
+
 ---
 
 ## Step 5 — Run the assessment
