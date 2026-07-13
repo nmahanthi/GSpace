@@ -743,15 +743,37 @@ if (-not $SkipCrawl) {
                     Write-Info "gcloud CLI not found in PATH"
                 }
                 else {
-                    Write-Info "Attempting to get token from gcloud (timeout: 5 seconds)..."
-                    $job = Start-Job -ScriptBlock { gcloud auth print-access-token 2>&1 }
-                    $completed = Wait-Job -Job $job -Timeout 5
+                    # Call gcloud directly via .NET Process instead of Start-Job.
+                    # Start-Job spins up a brand-new PowerShell host just to run gcloud,
+                    # which alone can take longer than the old 5s timeout on a loaded
+                    # machine / VPN, causing this step to be silently skipped and
+                    # Sites_Published_URLs.csv to never be written. Process.WaitForExit
+                    # gives an accurate timeout on the gcloud call itself with no extra
+                    # host-spin-up overhead.
+                    $gcloudTimeoutSeconds = 25
+                    Write-Info "Attempting to get token from gcloud (timeout: $gcloudTimeoutSeconds seconds)..."
 
-                    if ($null -ne $completed) {
-                        # Out-String + Trim() removes all \r\n that gcloud appends to its output.
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = $gcloudCheck.Source
+                    $psi.Arguments = 'auth print-access-token'
+                    $psi.RedirectStandardOutput = $true
+                    $psi.RedirectStandardError = $true
+                    $psi.UseShellExecute = $false
+                    $psi.CreateNoWindow = $true
+
+                    $proc = New-Object System.Diagnostics.Process
+                    $proc.StartInfo = $psi
+                    $proc.Start() | Out-Null
+
+                    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+                    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+                    if ($proc.WaitForExit($gcloudTimeoutSeconds * 1000)) {
+                        $stdout = $stdoutTask.GetAwaiter().GetResult()
+                        $stderr = $stderrTask.GetAwaiter().GetResult()
+                        # Trim removes all \r\n that gcloud appends to its output.
                         # Without this the Bearer header becomes "Bearer ya29.xxx\r\n" -> HTTP 401.
-                        $sitesApiToken = (Receive-Job -Job $job | Out-String).Trim()
-                        Remove-Job -Job $job -Force
+                        $sitesApiToken = ($stdout + $stderr).Trim()
 
                         if ($sitesApiToken -match '^ya29\.' -and $sitesApiToken.Length -gt 20) {
                             Write-Success "Access token obtained from gcloud"
@@ -765,8 +787,8 @@ if (-not $SkipCrawl) {
                         }
                     }
                     else {
-                        Write-Info "gcloud command timed out (>5 s)"
-                        Remove-Job -Job $job -Force
+                        Write-Info "gcloud command timed out (>$gcloudTimeoutSeconds s)"
+                        try { $proc.Kill() } catch {}
                     }
                 }
             }
