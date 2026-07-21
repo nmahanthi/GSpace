@@ -50,6 +50,16 @@ if not exist "%GAM_PATH%" (
 )
 echo [GAM] Using GAM at: %GAM_PATH%
 
+REM Number of parallel GAM worker processes for batch/csv operations.
+REM GAM's own default is 5. On Windows, each thread is a full spawned Python
+REM process, and large user counts (50-100+) combined with a high thread count
+REM have been observed to crash GAM with BrokenPipeError/BufferError inside its
+REM multiprocessing pool. Default here is a safer 10; override with the
+REM GAM_NUM_THREADS environment variable (set via -GamThreads in the
+REM orchestrator) if you need more throughput and your environment is stable.
+if not defined GAM_NUM_THREADS set GAM_NUM_THREADS=10
+echo [INFO] Using num_threads=%GAM_NUM_THREADS% for GAM batch/csv operations
+
 REM Build Sites query if a name filter was provided by the orchestrator
 if defined GAM_SITES_FILTER (
     set "SITES_QUERY=mimeType='application/vnd.google-apps.site' and trashed=false and (%GAM_SITES_FILTER%)"
@@ -70,18 +80,18 @@ if defined GAM_TARGET_FILE (
 
 echo [1/3] Minimal Google Sites sanity export...
 if defined GAM_SITES_FILTER (
-    "%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype
+    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype
 ) else (
-    "%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess redirect stderr - multiprocess %GAM_USER_TARGET% print filelist corpora alldrives fields id,name,mimetype filepath showmimetype gsite
+    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess redirect stderr - multiprocess %GAM_USER_TARGET% print filelist corpora alldrives fields id,name,mimetype filepath showmimetype gsite
 )
 if errorlevel 1 goto :fail
 
 echo [2/3] Detailed Google Sites inventory...
-"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,drivename,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks,capabilities.canshare,capabilities.canedit,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,capabilities.candelete
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,drivename,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks,capabilities.canshare,capabilities.canedit,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,capabilities.candelete
 if errorlevel 1 goto :fail
 
 echo [3/3] Google Sites permissions and security...
-"%GAM_PATH%" config auto_batch_min 1 num_threads 30 redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" showshareddrivepermissions fields id,name,webviewlink,driveid,drivename,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" showshareddrivepermissions fields id,name,webviewlink,driveid,drivename,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
 
 if errorlevel 1 goto :fail
 
@@ -89,9 +99,10 @@ echo.
 echo GAM exports completed successfully.
 echo Output folder: %OUTDIR%
 
-REM Clean up environment variable so it does not affect future runs
+REM Clean up environment variables so they do not affect future runs
 set GAM_SITES_FILTER=
 set SITES_QUERY=
+set GAM_NUM_THREADS=
 
 echo Cleaning CSV headers...
 powershell -NoProfile -Command "Get-ChildItem '%OUTDIR%\*.csv' | ForEach-Object { $lines = @(Get-Content $_.FullName); if ($lines.Count -gt 0) { $lines[0] = $lines[0] -replace '\.[0-9]+\.', '.'; $lines | Set-Content $_.FullName } }"

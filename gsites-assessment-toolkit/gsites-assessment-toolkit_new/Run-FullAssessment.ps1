@@ -31,6 +31,14 @@
 .PARAMETER SkipGAMExport
     Skip GAM export step (use existing output files)
 
+.PARAMETER GamThreads
+    Number of parallel GAM worker processes for the Step 1 export (default: 10).
+    GAM's own default is 5; this toolkit defaults higher for speed. On Windows,
+    each thread is a full spawned process, and large user counts (50-100+)
+    combined with a high thread count can crash GAM with BrokenPipeError/
+    BufferError inside its multiprocessing pool. Lower this (e.g. 5-10) if GAM
+    export fails with those errors on large tenants.
+
 .PARAMETER SkipBrowserAuth
     Skip browser authentication step (use existing .auth/state.json)
 
@@ -104,6 +112,7 @@ param(
 
     [switch]$SkipDependencyCheck,
     [switch]$SkipGAMExport,
+    [int]$GamThreads = 10,
     [switch]$SkipBrowserAuth,
     [switch]$SkipCrawl,
 
@@ -432,6 +441,9 @@ if (-not $SkipGAMExport) {
 
     Write-Info "Running GAM exports..."
     Write-Info "Progress output is being written to log files. Please wait..."
+
+    [Environment]::SetEnvironmentVariable('GAM_NUM_THREADS', $GamThreads, 'Process')
+    Write-Info "GAM num_threads: $GamThreads (lower this with -GamThreads if you see BrokenPipeError/BufferError on large tenants)"
 
     # If selected sites are specified, build a GAM name filter for the Sites export
     if ($SelectedSitesCsv) {

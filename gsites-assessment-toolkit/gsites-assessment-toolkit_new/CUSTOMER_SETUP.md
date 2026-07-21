@@ -160,6 +160,18 @@ user2@yourcompany.com
 .\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -TargetUsersCsv "target_users.csv"
 ```
 
+**Large tenants (50-100+ target users) — tune GAM thread count if Step 1 crashes:**
+
+GAM's Step 1 export runs multiple worker processes in parallel to scan each
+user's Drive. The toolkit defaults `-GamThreads` to `10`. On Windows, scanning
+many users (50-100+) at a high thread count can crash GAM with
+`BrokenPipeError` / `BufferError` inside its multiprocessing pool. If Step 1
+fails with those errors, lower the thread count and re-run:
+
+```powershell
+.\Run-FullAssessment.ps1 -PrimaryDomain "yourcompany.com" -TargetUsersCsv "target_users.csv" -GamThreads 5
+```
+
 ---
 
 ## Customer Changes Summary
