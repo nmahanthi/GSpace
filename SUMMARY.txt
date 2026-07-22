@@ -1,0 +1,211 @@
+═══════════════════════════════════════════════════════════════════════════════
+  MICROSOFT 365 OBJECT COUNTS EXTRACTION - COMPLETE PACKAGE
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ ALL FILES CREATED SUCCESSFULLY!
+
+📦 PACKAGE CONTENTS (6 files):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Get-M365ObjectCounts-Fast.ps1 (12 KB)
+   ⚡ RECOMMENDED - Quick extraction script
+   • Fast execution (5-15 minutes)
+   • Covers all major metrics
+   • Best for regular assessments
+
+2. Get-M365ObjectCounts.ps1 (12 KB)
+   🔍 DETAILED - Comprehensive extraction script
+   • Detailed site-level checks
+   • Slower execution (1-4 hours)
+   • Best for deep-dive analysis
+
+3. M365-Quick-Commands.ps1 (6.1 KB)
+   📝 MANUAL - Individual PowerShell commands
+   • Run commands one by one
+   • Great for learning
+   • Flexible approach
+
+4. Generate-HTML-Report.ps1 (6.3 KB)
+   📊 BONUS - HTML Report Generator
+   • Converts CSV to beautiful HTML report
+   • Interactive visual report
+   • Easy to share
+
+5. README-M365-Scripts.md (6.9 KB)
+   📚 DOCUMENTATION - Complete reference guide
+   • Detailed documentation
+   • Troubleshooting tips
+   • API references
+
+6. QUICK-START.md (5.7 KB)
+   🚀 QUICK START - Getting started guide
+   • Step-by-step instructions
+   • 5-minute setup
+   • Beginner-friendly
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  HOW TO USE
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: Install Prerequisites (PowerShell as Admin)
+────────────────────────────────────────────────────────────────────────────────
+Install-Module Microsoft.Graph -Scope CurrentUser -Force
+Install-Module PnP.PowerShell -Scope CurrentUser -Force
+
+
+STEP 2: Run the Fast Script
+────────────────────────────────────────────────────────────────────────────────
+.\Get-M365ObjectCounts-Fast.ps1 -AdminUrl "https://YOURTENANT-admin.sharepoint.com"
+
+Replace YOURTENANT with your actual tenant name (e.g., contoso)
+
+
+STEP 3: Generate HTML Report (Optional)
+────────────────────────────────────────────────────────────────────────────────
+.\Generate-HTML-Report.ps1 -CsvPath ".\M365ObjectCounts_20260722_083700.csv"
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  METRICS COVERAGE
+═══════════════════════════════════════════════════════════════════════════════
+
+TEAMS METRICS:
+  ✅ Teams sites
+  ✅ Groups with Dynamic membership  
+  ⚠️  Chats (estimated)
+  ✅ Guests
+
+SHAREPOINT ONLINE METRICS:
+  ✅ Not connected to O365 Groups or Teams
+  ✅ Connected to O365 Groups
+  ✅ Connected to O365 Groups and Microsoft Teams
+
+SHAREPOINT ONLINE - OTHERS:
+  ✅ Large site collection by size (>100GB)
+  ⚠️  Large site collection by numbers (sample)
+  ⚠️  Workflow 2010 (manual)
+  ⚠️  Check-out files (manual)
+  ⚠️  Lists with Lookup Threshold (manual)
+  ✅ Sandbox Solutions (N/A)
+  ⚠️  Custom Features (manual)
+  ⚠️  Custom List Templates (manual)
+  ⚠️  Custom Site Templates (manual)
+  ⚠️  Customised Pages (manual)
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  REQUIRED PERMISSIONS
+═══════════════════════════════════════════════════════════════════════════════
+
+ROLE (one of):
+  • Global Administrator
+  • Global Reader
+  • SharePoint Administrator
+
+API PERMISSIONS:
+  • Sites.Read.All
+  • Group.Read.All
+  • Team.ReadBasic.All
+  • User.Read.All
+  • Chat.Read.All
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  OUTPUT FILES
+═══════════════════════════════════════════════════════════════════════════════
+
+After running the script, you will get:
+
+1. CSV Report:
+   M365ObjectCounts_YYYYMMDD_HHMMSS.csv
+   
+   Format:
+   Category,ObjectType,Count
+   Teams,Teams sites,274
+   Teams,Groups with Dynamic membership,17
+   ...
+
+2. HTML Report (if you run Generate-HTML-Report.ps1):
+   M365ObjectCounts_Report.html
+   
+   Beautiful visual report with:
+   • Summary cards
+   • Color-coded tables
+   • Interactive design
+   • Easy to share
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  TIPS & BEST PRACTICES
+═══════════════════════════════════════════════════════════════════════════════
+
+⚡ PERFORMANCE:
+  • Use Fast script for regular checks
+  • Run during off-peak hours
+  • Expect 5-15 minutes for Fast, 1-4 hours for Detailed
+
+🔒 SECURITY:
+  • All scripts are READ-ONLY
+  • No modifications to your tenant
+  • Uses official Microsoft APIs
+
+📊 REPORTING:
+  • Keep historical reports for trend analysis
+  • Run monthly for capacity planning
+  • Share HTML reports with stakeholders
+
+🎯 ACCURACY:
+  • Some metrics require manual verification
+  • Chats count is estimated (sampling)
+  • Large site counts may be sampled
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  TROUBLESHOOTING
+═══════════════════════════════════════════════════════════════════════════════
+
+ISSUE: Module not found
+FIX: Install-Module Microsoft.Graph -Force
+     Install-Module PnP.PowerShell -Force
+
+ISSUE: Access denied
+FIX: Ensure you have Global Reader or SharePoint Admin role
+
+ISSUE: Cannot connect
+FIX: Verify admin URL format: https://TENANT-admin.sharepoint.com
+
+ISSUE: Script too slow
+FIX: Use the Fast version, run during off-hours
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  NEXT STEPS
+═══════════════════════════════════════════════════════════════════════════════
+
+1. ✅ Read QUICK-START.md for detailed instructions
+2. ✅ Install required PowerShell modules
+3. ✅ Run Get-M365ObjectCounts-Fast.ps1
+4. ✅ Review CSV output
+5. ✅ Generate HTML report for stakeholders
+6. ✅ Consult README-M365-Scripts.md for advanced usage
+
+
+═══════════════════════════════════════════════════════════════════════════════
+  SUPPORT & REFERENCES
+═══════════════════════════════════════════════════════════════════════════════
+
+Documentation:
+  • Microsoft Graph: https://learn.microsoft.com/powershell/microsoftgraph/
+  • PnP PowerShell: https://pnp.github.io/powershell/
+  • SharePoint Limits: https://learn.microsoft.com/office365/servicedescriptions/
+
+Package Created: July 22, 2026
+Version: 1.0
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎉 You're all set! Start with QUICK-START.md for step-by-step instructions.
+
+═══════════════════════════════════════════════════════════════════════════════
