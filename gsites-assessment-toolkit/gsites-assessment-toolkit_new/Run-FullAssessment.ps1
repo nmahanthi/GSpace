@@ -198,6 +198,90 @@ function Normalize-CsvHeaders {
     $lines | Set-Content $Path
 }
 
+function Deduplicate-GamExports {
+    param(
+        [Parameter(Mandatory = $true)][string]$OutputDir
+    )
+
+    # GAM's "all users print sites" iterates every user's Drive, so a site hosted
+    # on a Shared Drive is emitted once per member with access to that drive
+    # (N members => N duplicate rows for the same site 'id'). Collapse those
+    # duplicates here so downstream crawling/scoring processes each site once.
+    Write-Info "Deduplicating GAM exports (Shared Drive sites are listed once per member with access)..."
+
+    foreach ($file in @('GSites_Inventory_Detailed.csv', 'GSites_Inventory_Min.csv')) {
+        $path = Join-Path $OutputDir $file
+        if (-not (Test-Path $path)) { continue }
+
+        $rows = @(Import-Csv $path)
+        if ($rows.Count -eq 0) { continue }
+
+        $seen = [System.Collections.Generic.HashSet[string]]::new()
+        $deduped = [System.Collections.Generic.List[object]]::new()
+        $noId = [System.Collections.Generic.List[object]]::new()
+
+        # Pass 1: prefer the row logged under the site's actual owner (most authoritative)
+        foreach ($row in $rows) {
+            $id = Get-SafeProperty -InputObject $row -PropertyNames @('id')
+            if ([string]::IsNullOrWhiteSpace($id)) { $noId.Add($row) | Out-Null; continue }
+            if ($seen.Contains($id)) { continue }
+
+            $owner = Get-SafeProperty -InputObject $row -PropertyNames @('Owner')
+            $ownerEmail = Get-SafeProperty -InputObject $row -PropertyNames @('owners.emailAddress')
+            if ($owner -and $ownerEmail -and $owner -eq $ownerEmail) {
+                $deduped.Add($row) | Out-Null
+                $seen.Add($id) | Out-Null
+            }
+        }
+        # Pass 2: fill in any remaining unique ids with their first-seen row
+        foreach ($row in $rows) {
+            $id = Get-SafeProperty -InputObject $row -PropertyNames @('id')
+            if ([string]::IsNullOrWhiteSpace($id) -or $seen.Contains($id)) { continue }
+            $deduped.Add($row) | Out-Null
+            $seen.Add($id) | Out-Null
+        }
+        # Rows without an 'id' can't be deduped reliably - keep them as-is
+        foreach ($row in $noId) { $deduped.Add($row) | Out-Null }
+
+        if ($deduped.Count -lt $rows.Count) {
+            $deduped | Export-Csv -NoTypeInformation -Path $path
+            Write-Success "Deduplicated $file : $($rows.Count) rows -> $($deduped.Count) unique site(s)"
+        }
+        else {
+            Write-Info "  $file already unique ($($rows.Count) rows)"
+        }
+    }
+
+    $permsPath = Join-Path $OutputDir 'GSites_Permissions.csv'
+    if (Test-Path $permsPath) {
+        $rows = @(Import-Csv $permsPath)
+        if ($rows.Count -gt 0) {
+            $seen = [System.Collections.Generic.HashSet[string]]::new()
+            $deduped = [System.Collections.Generic.List[object]]::new()
+            foreach ($row in $rows) {
+                $id = Get-SafeProperty -InputObject $row -PropertyNames @('id')
+                if ([string]::IsNullOrWhiteSpace($id)) { $deduped.Add($row) | Out-Null; continue }
+
+                # Dedup key: site id + permission id (a site legitimately has multiple
+                # permission rows - one per grantee - so only collapse exact repeats)
+                $permId = Get-SafeProperty -InputObject $row -PropertyNames @('permission.id')
+                $key = "$id|$permId"
+                if ($seen.Contains($key)) { continue }
+                $deduped.Add($row) | Out-Null
+                $seen.Add($key) | Out-Null
+            }
+
+            if ($deduped.Count -lt $rows.Count) {
+                $deduped | Export-Csv -NoTypeInformation -Path $permsPath
+                Write-Success "Deduplicated GSites_Permissions.csv: $($rows.Count) rows -> $($deduped.Count) unique permission row(s)"
+            }
+            else {
+                Write-Info "  GSites_Permissions.csv already unique ($($rows.Count) rows)"
+            }
+        }
+    }
+}
+
 function Filter-InventoryBySelectedSites {
     param(
         [Parameter(Mandatory = $true)][string]$InventoryPath,
@@ -509,9 +593,16 @@ If the extracted names do not match the actual Drive file names, provide the exa
             Write-Error-Custom "  [MISSING] $file"
         }
     }
+
+    # GAM's "all users" scan lists Shared Drive-hosted sites once per member with
+    # access, producing massive duplication. Collapse to one row per unique site.
+    Deduplicate-GamExports -OutputDir $OutputDir
 }
 else {
     Write-Step "STEP 1: GAM Exports (SKIPPED)"
+    # Even when reusing a previous export, make sure it isn't carrying duplicates
+    # from before this fix (or from an externally-supplied -InventoryCsv).
+    Deduplicate-GamExports -OutputDir $OutputDir
 }
 
 # Filter inventory to selected sites if a CSV is provided
@@ -525,6 +616,7 @@ if ($SelectedSitesCsv) {
         }
         Copy-Item $InventoryCsv $inventoryFile -Force
         Write-Success "Copied inventory from $InventoryCsv to output folder"
+        Deduplicate-GamExports -OutputDir $OutputDir
     }
 
     if (-not (Test-Path $inventoryFile)) {
