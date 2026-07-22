@@ -78,20 +78,24 @@ if defined GAM_TARGET_FILE (
     echo [INFO] before you see any progress on the screen. Please be patient!
 )
 
+REM NOTE: These exports scan each user's My Drive only (no "corpora alldrives").
+REM Shared Drive-hosted sites are intentionally excluded per customer requirement -
+REM this also avoids the massive per-user duplication that Shared Drive scanning
+REM caused (a Shared Drive site was previously listed once per member with access).
 echo [1/3] Minimal Google Sites sanity export...
 if defined GAM_SITES_FILTER (
-    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype
+    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,mimetype
 ) else (
-    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess redirect stderr - multiprocess %GAM_USER_TARGET% print filelist corpora alldrives fields id,name,mimetype filepath showmimetype gsite
+    "%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Min.csv" multiprocess redirect stderr - multiprocess %GAM_USER_TARGET% print filelist fields id,name,mimetype filepath showmimetype gsite
 )
 if errorlevel 1 goto :fail
 
 echo [2/3] Detailed Google Sites inventory...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,driveid,drivename,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks,capabilities.canshare,capabilities.canedit,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,capabilities.candelete
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Inventory_Detailed.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,parents,size,quotabytesused,version,viewedbymetime,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled,starred,modifiedbyme,modifiedbymetime,viewedbyme,explicitlytrashed,spaces,thumbnaillink,thumbnailversion,hasthumbnail,exportlinks,capabilities.canshare,capabilities.canedit,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,capabilities.candelete
 if errorlevel 1 goto :fail
 
 echo [3/3] Google Sites permissions and security...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist corpora alldrives query "%SITES_QUERY%" showshareddrivepermissions fields id,name,webviewlink,driveid,drivename,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_Permissions.csv" multiprocess %GAM_USER_TARGET% print filelist query "%SITES_QUERY%" fields id,name,webviewlink,owners,basicpermissions,shared,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow
 
 if errorlevel 1 goto :fail
 
