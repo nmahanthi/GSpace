@@ -32,7 +32,9 @@ REM                           instead of passing it as an argument.
 REM
 REM Outputs (written to output/):
 REM   GSites_SharedDrive_Inventory.csv    One row per Site found in the drives
-REM   GSites_SharedDrive_Permissions.csv  One row per (Site, grantee) permission
+REM   GSites_SharedDrive_Permissions.csv  One row per (Site, grantee) permission,
+REM                                       flagged with whether access is direct
+REM                                       or inherited from Shared Drive membership
 REM ===========================================================================
 
 if "%~1"=="" (
@@ -95,11 +97,11 @@ echo [INFO] Using num_threads=%GAM_NUM_THREADS% for GAM multiprocess operations
 set "SITES_QUERY=mimeType='application/vnd.google-apps.site' and trashed=false"
 
 echo [1/2] Google Sites inventory across selected Shared Drives...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Inventory.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,mimetype,webviewlink,createdtime,modifiedtime,owners,shared,driveid,size showdrivename
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Inventory.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,mimetype,description,webviewlink,createdtime,modifiedtime,owners,lastmodifyinguser,shared,driveid,size,hasaugmentedpermissions,capabilities.canshare,capabilities.canedit,capabilities.candelete,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,spaces,thumbnaillink showdrivename
 if errorlevel 1 goto :fail
 
-echo [2/2] Google Sites permissions across selected Shared Drives...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Permissions.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,webviewlink,owners,basicpermissions,shared,driveid,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow showshareddrivepermissions
+echo [2/2] Google Sites permissions across selected Shared Drives (direct vs inherited)...
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Permissions.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,webviewlink,owners,lastmodifyinguser,basicpermissions,permissiondetails,shared,driveid,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow showshareddrivepermissions
 if errorlevel 1 goto :fail
 
 echo.
