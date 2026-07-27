@@ -1,21 +1,31 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\output",
-    [string]$PrimaryDomain = ''   # Set your domain here, e.g. 'yourcompany.com', or pass -PrimaryDomain at runtime
+    [string]$PrimaryDomain = '',  # Set your domain here, e.g. 'yourcompany.com', or pass -PrimaryDomain at runtime
+
+    # File names (relative to -OutputDir) to read/write. Defaults match the
+    # main My-Drive pipeline; override to score a different export set (e.g.
+    # the standalone Shared Drive export files).
+    [string]$InventoryFile = 'GSites_Inventory_Detailed.csv',
+    [string]$PermissionsFile = 'GSites_Permissions.csv',
+    [string]$PagesFile = 'Pages.csv',
+    [string]$EmbedsFile = 'Embeds.csv',
+    [string]$ExternalDomainsFile = 'ExternalDomains.csv',
+    [string]$ReportFile = 'Complexity_Report.csv'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$sites = Import-Csv (Join-Path $OutputDir 'GSites_Inventory_Detailed.csv')
+$sites = Import-Csv (Join-Path $OutputDir $InventoryFile)
 $permissions = @()
 $pages = @()
 $embeds = @()
 $externalDomains = @()
 
-if (Test-Path (Join-Path $OutputDir 'GSites_Permissions.csv')) { $permissions = Import-Csv (Join-Path $OutputDir 'GSites_Permissions.csv') }
-if (Test-Path (Join-Path $OutputDir 'Pages.csv')) { $pages = Import-Csv (Join-Path $OutputDir 'Pages.csv') }
-if (Test-Path (Join-Path $OutputDir 'Embeds.csv')) { $embeds = Import-Csv (Join-Path $OutputDir 'Embeds.csv') }
-if (Test-Path (Join-Path $OutputDir 'ExternalDomains.csv')) { $externalDomains = Import-Csv (Join-Path $OutputDir 'ExternalDomains.csv') }
+if (Test-Path (Join-Path $OutputDir $PermissionsFile)) { $permissions = Import-Csv (Join-Path $OutputDir $PermissionsFile) }
+if (Test-Path (Join-Path $OutputDir $PagesFile)) { $pages = Import-Csv (Join-Path $OutputDir $PagesFile) }
+if (Test-Path (Join-Path $OutputDir $EmbedsFile)) { $embeds = Import-Csv (Join-Path $OutputDir $EmbedsFile) }
+if (Test-Path (Join-Path $OutputDir $ExternalDomainsFile)) { $externalDomains = Import-Csv (Join-Path $OutputDir $ExternalDomainsFile) }
 
 $report = New-Object System.Collections.Generic.List[object]
 
@@ -79,5 +89,5 @@ foreach ($site in $sites) {
         })
 }
 
-$report | Export-Csv -NoTypeInformation -Path (Join-Path $OutputDir 'Complexity_Report.csv')
-Write-Host 'Scoring completed. Output: Complexity_Report.csv'
+$report | Export-Csv -NoTypeInformation -Path (Join-Path $OutputDir $ReportFile)
+Write-Host "Scoring completed. Output: $ReportFile"
