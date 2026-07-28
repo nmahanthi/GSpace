@@ -13,22 +13,25 @@ REM need to inventory Sites living on a known, hand-picked list of Shared
 REM Drives.
 REM
 REM Usage:
-REM   01d_run_gam_exports_shareddrive.cmd <SharedDriveIDs.csv> <ScanningUserEmail>
+REM   01d_run_gam_exports_shareddrive.cmd <SharedDriveIDs.csv> [DefaultScanningUserEmail]
 REM
 REM   <SharedDriveIDs.csv>    Required. CSV file with a header row containing
-REM                           a "driveId" column, one Shared Drive ID per row.
-REM                           Example:
-REM                             driveId
-REM                             0AbCDeFGhIJKLmnUK9PVA
-REM                             0XyzTeamDriveIdHere123
+REM                           "driveId" AND "account" columns - one row per
+REM                           Shared Drive, each paired with the Workspace
+REM                           user account that has access to THAT drive
+REM                           (its owner/organizer/member, or a Super Admin).
+REM                           This supports drives governed by different
+REM                           owners, so no single admin needs access to
+REM                           every drive. Example:
+REM                             driveId,account
+REM                             0AbCDeFGhIJKLmnUK9PVA,owner1@rocheua.com
+REM                             0XyzTeamDriveIdHere123,owner2@rocheua.com
 REM
-REM   <ScanningUserEmail>     Required. The Workspace user GAM will impersonate
-REM                           to query these Shared Drives. Must either be a
-REM                           member of every Shared Drive listed, or a Super
-REM                           Admin (Super Admins can see all Shared Drives in
-REM                           the domain regardless of membership). Can also be
-REM                           set via the GAM_ADMIN_USER environment variable
-REM                           instead of passing it as an argument.
+REM   [DefaultScanningUserEmail]  Optional. Fallback account used for any row
+REM                           whose "account" cell is left blank. Can also be
+REM                           set via the GAM_ADMIN_USER environment variable.
+REM                           If a row has no account and no default is given,
+REM                           the script fails fast with a clear error.
 REM
 REM Outputs (written to output/):
 REM   GSites_SharedDrive_Inventory.csv    One row per Site found in the drives
@@ -40,7 +43,7 @@ REM ===========================================================================
 if "%~1"=="" (
     echo ERROR: Missing required argument: path to Shared Drive IDs CSV.
     echo.
-    echo Usage: %~nx0 ^<SharedDriveIDs.csv^> ^<ScanningUserEmail^>
+    echo Usage: %~nx0 ^<SharedDriveIDs.csv^> [DefaultScanningUserEmail]
     exit /b 1
 )
 set SHAREDDRIVE_CSV=%~1
@@ -49,14 +52,8 @@ if not exist "%SHAREDDRIVE_CSV%" (
     exit /b 1
 )
 
-if not "%~2"=="" set GAM_ADMIN_USER=%~2
-if not defined GAM_ADMIN_USER (
-    echo ERROR: No scanning user specified.
-    echo   Pass it as the 2nd argument, or set the GAM_ADMIN_USER environment
-    echo   variable to a Workspace user/admin email that has access to the
-    echo   Shared Drives listed in %SHAREDDRIVE_CSV%.
-    exit /b 1
-)
+set "DEFAULT_ACCOUNT=%~2"
+if not defined DEFAULT_ACCOUNT if defined GAM_ADMIN_USER set "DEFAULT_ACCOUNT=%GAM_ADMIN_USER%"
 
 REM --- GAM path resolution: GAM_PATH env var -^> gam.cfg -^> system PATH ---
 if defined GAM_PATH goto :verify_gam
@@ -87,21 +84,30 @@ if not exist "%GAM_PATH%" (
     exit /b 1
 )
 echo [GAM] Using GAM at: %GAM_PATH%
-echo [INFO] Scanning user (impersonated for Shared Drive access): %GAM_ADMIN_USER%
-echo [INFO] Shared Drive IDs source: %SHAREDDRIVE_CSV%
+echo [INFO] Shared Drive IDs source: %SHAREDDRIVE_CSV% (per-row "account" column selects the scanning user for that drive)
 
 REM Number of parallel GAM worker processes, one per Shared Drive ID row.
 if not defined GAM_NUM_THREADS set GAM_NUM_THREADS=5
 echo [INFO] Using num_threads=%GAM_NUM_THREADS% for GAM multiprocess operations
 
+REM Validate the input CSV has "driveId" and "account" columns, fill any
+REM blank "account" cells with DEFAULT_ACCOUNT (if provided), and write the
+REM result to a temp CSV used to drive GAM's multiprocess substitution below.
+REM This is what lets each Shared Drive be scanned by its own owner/
+REM organizer instead of requiring one Super Admin with access to all drives.
+set "EFFECTIVE_CSV=%OUTDIR%\_SharedDriveIDs_effective.csv"
+powershell -NoProfile -Command ^
+  "$rows = @(Import-Csv '%SHAREDDRIVE_CSV%'); if ($rows.Count -eq 0) { Write-Host '[ERROR] CSV contains no data rows: %SHAREDDRIVE_CSV%'; exit 1 }; if (-not ($rows[0].PSObject.Properties.Name -contains 'driveId')) { Write-Host '[ERROR] CSV is missing required column: driveId'; exit 1 }; if (-not ($rows[0].PSObject.Properties.Name -contains 'account')) { Write-Host '[ERROR] CSV is missing required column: account. Each row must specify driveId,account - the Workspace user with access to that specific Shared Drive.'; exit 1 }; $default = '%DEFAULT_ACCOUNT%'; $missing = @($rows | Where-Object { [string]::IsNullOrWhiteSpace($_.account) }); if ($missing.Count -gt 0 -and [string]::IsNullOrWhiteSpace($default)) { Write-Host ('[ERROR] Missing account value for driveId: ' + (($missing | ForEach-Object { $_.driveId }) -join ', ') + '. Provide an account per row, or pass a DefaultScanningUserEmail as the 2nd argument.'); exit 1 }; foreach ($r in $rows) { if ([string]::IsNullOrWhiteSpace($r.account)) { $r.account = $default } }; $rows | Export-Csv -NoTypeInformation -Path '%EFFECTIVE_CSV%'"
+if errorlevel 1 goto :fail
+
 set "SITES_QUERY=mimeType='application/vnd.google-apps.site' and trashed=false"
 
 echo [1/2] Google Sites inventory across selected Shared Drives...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Inventory.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,mimetype,description,webviewlink,createdtime,modifiedtime,owners,lastmodifyinguser,shared,driveid,size,hasaugmentedpermissions,capabilities.canshare,capabilities.canedit,capabilities.candelete,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,spaces,thumbnaillink showdrivename
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Inventory.csv" multiprocess csv "%EFFECTIVE_CSV%" gam user "~account" print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,mimetype,description,webviewlink,createdtime,modifiedtime,owners,lastmodifyinguser,shared,driveid,size,hasaugmentedpermissions,capabilities.canshare,capabilities.canedit,capabilities.candelete,capabilities.candownload,capabilities.cancopy,capabilities.canremovechildren,spaces,thumbnaillink showdrivename
 if errorlevel 1 goto :fail
 
 echo [2/2] Google Sites permissions across selected Shared Drives (direct vs inherited)...
-"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Permissions.csv" multiprocess csv "%SHAREDDRIVE_CSV%" gam user %GAM_ADMIN_USER% print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,webviewlink,owners,lastmodifyinguser,basicpermissions,permissiondetails,shared,driveid,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow showshareddrivepermissions
+"%GAM_PATH%" config auto_batch_min 1 num_threads %GAM_NUM_THREADS% redirect csv "%OUTDIR%\GSites_SharedDrive_Permissions.csv" multiprocess csv "%EFFECTIVE_CSV%" gam user "~account" print filelist select teamdriveid "~driveId" query "%SITES_QUERY%" fields id,name,webviewlink,owners,lastmodifyinguser,basicpermissions,permissiondetails,shared,driveid,copyrequireswriterpermission,viewerscancopycontent,writerscanshare,inheritedpermissionsdisabled oneitemperrow showshareddrivepermissions
 if errorlevel 1 goto :fail
 
 echo.
