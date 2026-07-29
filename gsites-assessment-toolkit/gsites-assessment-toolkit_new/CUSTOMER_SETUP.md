@@ -174,6 +174,18 @@ fails with those errors, lower the thread count and re-run:
 
 ---
 
+## Step 6 — (Optional) Generate a consolidated manifest
+
+Not run automatically by `Run-FullAssessment.ps1`. After scoring completes,
+run this to join all reports into a single `GSites_Manifest.csv` (one row
+per site, with owner, page/embed/domain counts, grantees, and score):
+
+```powershell
+.\06_generate_manifest.ps1 -PrimaryDomain "yourcompany.com"
+```
+
+---
+
 ## Customer Changes Summary
 
 | File | What to Change | Required? |
@@ -199,3 +211,4 @@ All output is written to the `output\` folder:
 | `Embeds.csv` | Embedded content found on each page |
 | `ExternalDomains.csv` | External domains referenced |
 | `Complexity_Report.csv` | Final complexity score per site |
+| `GSites_Manifest.csv` | Consolidated per-site manifest (run `06_generate_manifest.ps1` manually after Step 5) |

@@ -1,0 +1,78 @@
+{
+  "export_system": "gam_tool",
+  "source_workload": "gsites",
+  "export_version": "1.0",
+  "snapshot_id": "GSITES_20260729_063059Z",
+  "snapshot_time_utc": "2026-07-29T06:30:59Z",
+  "run_type": "assessment",
+  "environment": "prod",
+  "tenant_name": "rocheua.com",
+  "exported_by": "gsites_gam_tool",
+  "delivery_format": "csv",
+  "file_naming_convention": "{dataset}_{snapshot_id}_B{NNN}.csv",
+  "datasets": [
+    {
+      "dataset_name": "complexity_report",
+      "file_name": "Complexity_Report.csv",
+      "record_count": 127,
+      "schema_name": "canonical_complexity_report",
+      "description": "complexity_report dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "embeds",
+      "file_name": "Embeds.csv",
+      "record_count": 127,
+      "schema_name": "canonical_embeds",
+      "description": "embeds dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "externaldomains",
+      "file_name": "ExternalDomains.csv",
+      "record_count": 508,
+      "schema_name": "canonical_externaldomains",
+      "description": "externaldomains dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "gsites_inventory_detailed",
+      "file_name": "GSites_Inventory_Detailed.csv",
+      "record_count": 127,
+      "schema_name": "canonical_gsites_inventory_detailed",
+      "description": "gsites_inventory_detailed dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "gsites_inventory_min",
+      "file_name": "GSites_Inventory_Min.csv",
+      "record_count": 127,
+      "schema_name": "canonical_gsites_inventory_min",
+      "description": "gsites_inventory_min dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "gsites_manifest",
+      "file_name": "GSites_Manifest.csv",
+      "record_count": 127,
+      "schema_name": "canonical_gsites_manifest",
+      "description": "gsites_manifest dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "gsites_permissions",
+      "file_name": "GSites_Permissions.csv",
+      "record_count": 291,
+      "schema_name": "canonical_gsites_permissions",
+      "description": "gsites_permissions dataset exported from GAM Tool"
+    },
+    {
+      "dataset_name": "pages",
+      "file_name": "Pages.csv",
+      "record_count": 127,
+      "schema_name": "canonical_pages",
+      "description": "pages dataset exported from GAM Tool"
+    }
+  ],
+  "ingestion_control": {
+    "run_id_pattern": "RUN_GSITES_20260729_063059Z",
+    "workload_name": "gsites",
+    "snapshot_granularity": "full",
+    "is_delta": false,
+    "is_validation_extract": false
+  }
+}

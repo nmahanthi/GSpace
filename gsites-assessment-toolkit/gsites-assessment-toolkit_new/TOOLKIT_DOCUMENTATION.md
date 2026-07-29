@@ -33,6 +33,7 @@ assessed.
 | 3 | `02_save_playwright_auth.js` | Save a logged-in browser session for crawling | `-SkipBrowserAuth` |
 | 4 | `03_crawl_sites.js` **or** `03b_api_extract_embeds.js` | Crawl each site, extract pages/embeds/external links | `-SkipCrawl` |
 | 5 | `05_score_sites.ps1` | Compute complexity score per site, write final report | always runs |
+| 6 | `06_generate_manifest.ps1` | Consolidate all reports into one per-site manifest CSV | not run by the orchestrator; run manually |
 
 Each script writes into a shared `output/` folder so later steps can pick
 up earlier CSVs by fixed filename.
@@ -153,6 +154,35 @@ each site computes:
 ≤75, `Very High` >75) and a migration `Recommendation`. Result is written
 to `output/Complexity_Report.csv`, one row per site.
 
+### 3.6 `06_generate_manifest.ps1` — Consolidated Manifest (Step 6, manual)
+
+Not part of `Run-FullAssessment.ps1` — run it yourself after Step 5.
+Joins `GSites_Inventory_Detailed.csv`, `GSites_Permissions.csv`,
+`Pages.csv`, `Embeds.csv`, `ExternalDomains.csv`, and
+`Complexity_Report.csv` on site `id` into a single row per site, so a
+reviewer has one file instead of six to cross-reference. Columns include
+owner/created/modified/size, page and crawl-error counts, embed
+count/types, external domain count/list, permission row count, a
+semicolon-joined `Grantees` list (`type:identity:role:internal|external`,
+using `-PrimaryDomain` to classify), external grantee count, and the
+score/rating/recommendation from the complexity report.
+
+Writes `output/GSites_Manifest.csv`. All input/output file names are
+parameters, so the same script also works against the standalone Shared
+Drive export set (see `05b_score_shareddrive_sites.ps1`) by pointing the
+`-*File` parameters at the `GSites_SharedDrive_*.csv` files:
+
+```powershell
+.\06_generate_manifest.ps1 -PrimaryDomain "rocheua.com" `
+    -InventoryFile 'GSites_SharedDrive_Inventory.csv' `
+    -PermissionsFile 'GSites_SharedDrive_Permissions.csv' `
+    -PagesFile 'GSites_SharedDrive_Pages.csv' `
+    -EmbedsFile 'GSites_SharedDrive_Embeds.csv' `
+    -ExternalDomainsFile 'GSites_SharedDrive_ExternalDomains.csv' `
+    -ComplexityReportFile 'GSites_SharedDrive_Complexity_Report.csv' `
+    -ManifestFile 'GSites_SharedDrive_Manifest.csv'
+```
+
 ---
 
 ## 4. Orchestrator Support Functions (`Run-FullAssessment.ps1`)
@@ -229,5 +259,6 @@ requires no additional Google Cloud project configuration.
 | `Embeds.csv` | Step 4 | One row per embedded/linked artifact found |
 | `ExternalDomains.csv` | Step 4 | One row per distinct external domain referenced per page |
 | `Complexity_Report.csv` | Step 5 | Final per-site score, rating, and migration recommendation |
+| `GSites_Manifest.csv` | Step 6 (manual) | Consolidated per-site manifest joining all reports above |
 | `gam_target_users.csv` | Step 1 (orchestrator) | Generated user-email list passed to GAM when scoping to specific users |
 | `GSites_Inventory_Detailed.csv.full` | Orchestrator | Backup of the full (unfiltered) inventory when `-SelectedSitesCsv` is used |
