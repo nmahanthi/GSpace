@@ -47,13 +47,6 @@
       "description": "gsites_inventory_min dataset exported from GAM Tool"
     },
     {
-      "dataset_name": "gsites_manifest",
-      "file_name": "GSites_Manifest.csv",
-      "record_count": 127,
-      "schema_name": "canonical_gsites_manifest",
-      "description": "gsites_manifest dataset exported from GAM Tool"
-    },
-    {
       "dataset_name": "gsites_permissions",
       "file_name": "GSites_Permissions.csv",
       "record_count": 291,
