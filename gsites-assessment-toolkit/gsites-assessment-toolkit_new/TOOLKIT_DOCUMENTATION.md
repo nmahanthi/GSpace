@@ -17,14 +17,20 @@ count, embedded content (Sheets, Forms, Apps Script, YouTube, etc.),
 external domain references, and sharing/permission risk.
 
 **Scope note:** Shared Drive-hosted sites are intentionally **excluded**
-(see §5.2). Only sites stored in an individual user's My Drive are
-assessed.
+from this main pipeline (see §5.2). Only sites stored in an individual
+user's My Drive are assessed here. Shared Drive-hosted sites are assessed
+by a **separate, standalone pipeline** — see §3.7–§3.10.
 
 ---
 
 ## 2. Pipeline Overview
 
-`Run-FullAssessment.ps1` is the single entry point. It runs 5 steps in order:
+There are **two independent pipelines** in this toolkit, sharing the same
+scoring/manifest logic but with different inventory sources:
+
+### 2.1 Main pipeline — My Drive sites (`Run-FullAssessment.ps1`)
+
+Single entry point. Runs 5 steps in order:
 
 | Step | Script | Purpose | Can skip? |
 |---|---|---|---|
@@ -35,8 +41,24 @@ assessed.
 | 5 | `05_score_sites.ps1` | Compute complexity score per site, write final report | always runs |
 | 6 | `06_generate_manifest.ps1` | Consolidate all reports into one per-site manifest CSV | not run by the orchestrator; run manually |
 
-Each script writes into a shared `output/` folder so later steps can pick
-up earlier CSVs by fixed filename.
+### 2.2 Standalone pipeline — Shared Drive sites (`Run-SharedDriveAssessment.ps1`)
+
+Separate entry point, opt-in, run only when a customer needs Shared
+Drive-hosted sites assessed too. Runs 3 steps:
+
+| Step | Script | Purpose | Can skip? |
+|---|---|---|---|
+| 1 | `01d_run_gam_exports_shareddrive.cmd` | Export site inventory + permissions for a specific list of Shared Drives | `-SkipExport` |
+| 2 | `01e_list_shareddrive_metadata.cmd` | Export drive-level sharing settings + organizers | `-SkipMetadata` |
+| 3 | `05b_score_shareddrive_sites.ps1` | Dedup + compute security-only complexity score | always runs |
+| — | `06_generate_manifest.ps1` | Consolidate reports into one manifest (point `-*File` params at `GSites_SharedDrive_*.csv`) | not run automatically; run manually |
+
+This pipeline has no crawling step — it does not visit site content, only
+Drive/permission metadata — so its complexity score reflects sharing risk
+only (see §3.10).
+
+Each script in both pipelines writes into a shared `output/` folder so
+later steps can pick up earlier CSVs by fixed filename.
 
 ---
 
@@ -183,6 +205,100 @@ Drive export set (see `05b_score_shareddrive_sites.ps1`) by pointing the
     -ManifestFile 'GSites_SharedDrive_Manifest.csv'
 ```
 
+### 3.7 `01d_run_gam_exports_shareddrive.cmd` — Shared Drive GSites Export (Standalone Step 1)
+
+```
+01d_run_gam_exports_shareddrive.cmd <SharedDriveIDs.csv> [DefaultScanningUserEmail]
+```
+
+Exports the same two categories of data as the main pipeline's Step 1, but
+scoped to a specific, known list of Shared Drives instead of `all users`.
+
+**Input CSV** (`driveId,account`):
+```csv
+driveId,account
+0AbCDeFGhIJKLmnUK9PVA,owner1@rocheua.com
+0XyzTeamDriveIdHere123,owner2@rocheua.com
+```
+`driveId` is the Shared Drive's ID; `account` is the Workspace user GAM
+impersonates to scan **that specific drive** (its owner, an organizer, a
+member, or a Super Admin). This lets different drives be scanned by
+whoever actually has access to them — no single admin needs universal
+access. Rows with a blank `account` fall back to `[DefaultScanningUserEmail]`
+(or the `GAM_ADMIN_USER` env var); if neither is set, the script fails fast
+listing the offending `driveId`s.
+
+Outputs:
+- **`GSites_SharedDrive_Inventory.csv`** — uses `select teamdriveid "~driveId"`
+  to scope the listing to exactly one Shared Drive per row (not
+  `corpora alldrives`, which expands every drive a user can see — the
+  behavior that caused per-member duplication in an earlier design, see
+  `GAM_DOCUMENTATION.md` §6.1). Includes `driveid`/`drivename` and
+  `hasaugmentedpermissions`.
+- **`GSites_SharedDrive_Permissions.csv`** — adds `permissiondetails` and
+  `showshareddrivepermissions`, which resolve whether each grantee's access
+  is **direct** (granted on the file) or **inherited** (granted at the
+  drive/folder level) — a distinction only meaningful for Shared Drive
+  content.
+
+`GAM_NUM_THREADS` defaults to **5** here (vs. 10 in the main pipeline),
+since each worker expands a whole Shared Drive's file tree.
+
+### 3.8 `01e_list_shareddrive_metadata.cmd` — Shared Drive Metadata (Standalone Step 2)
+
+Same input CSV/account-resolution logic as `01d`. Reports on the **drives
+themselves** rather than the sites on them:
+
+- **`GSites_SharedDrive_Settings.csv`** — one row per drive: id, name,
+  createdTime, and flattened `restrictions` fields
+  (`adminManagedRestrictions`, `domainUsersOnly`, `driveMembersOnly`,
+  `copyRequiresWriterPermission`, `sharingFoldersRequiresOrganizerPermission`).
+  Sourced from `gam ... info shareddrive "~driveId" ... formatjson`, forced
+  to `num_threads 1` (concurrent workers writing raw JSON to a shared
+  stdout stream would risk interleaving/corrupting output), then
+  reassembled and parsed by an inline PowerShell JSON-repair step (GAM's
+  `formatjson` output has no separator or enclosing array between records).
+- **`GSites_SharedDrive_Organizers.csv`** — one row per (drive, organizer),
+  from `print shareddriveorganizers`. Lists Manager-role users/groups per
+  drive. Note: full restriction visibility in the Settings export requires
+  the scanning `account` to itself be a Manager/Organizer of that drive.
+
+Metadata export failures are non-fatal to the overall run (Settings/
+Organizers are not required for scoring) — `Run-SharedDriveAssessment.ps1`
+logs a warning and continues.
+
+### 3.9 `Run-SharedDriveAssessment.ps1` — Standalone Orchestrator
+
+```powershell
+.\Run-SharedDriveAssessment.ps1 -SharedDriveIdsCsv "SharedDriveIDs.csv" -PrimaryDomain "rocheua.com"
+```
+
+Runs `01d` → `01e` → `05b` in order, with the same logged-process/log-tail
+pattern as the main orchestrator. Parameters: `-SharedDriveIdsCsv`
+(required), `-PrimaryDomain` (required), `-DefaultScanningUserEmail`
+(optional fallback account), `-GamThreads` (default 5), `-SkipExport`,
+`-SkipMetadata`. Prints a final summary of all 5 possible output files
+with row counts (or `[MISSING]` if a file wasn't produced).
+
+### 3.10 `05b_score_shareddrive_sites.ps1` — Shared Drive Scoring (Standalone Step 3)
+
+1. **Dedup** — collapses `GSites_SharedDrive_Inventory.csv` by `id` and
+   `GSites_SharedDrive_Permissions.csv` by `id`+`permission.id`. Not
+   usually needed for the `select teamdriveid` export pattern (each site is
+   looked up directly, not iterated per-member like the old `all users`
+   approach), but kept as a safety net in case the same drive ID appears
+   twice in the input CSV, or a site is reachable via more than one row.
+2. **Score** — delegates to the shared `05_score_sites.ps1` engine (§3.5),
+   pointing its file parameters at the `GSites_SharedDrive_*.csv` files and
+   writing `GSites_SharedDrive_Complexity_Report.csv`.
+
+**Important:** this pipeline never crawls page content, so `Pages.csv`/
+`Embeds.csv`/`ExternalDomains.csv` don't exist for it — `StructurePoints`
+and `EmbedPoints` are always 0. Only `SecurityPoints` (derived from
+permissions) contributes to `TotalScore`. This is expected; the Shared
+Drive pipeline answers "how exposed is this site's sharing?" rather than
+"how complex is this site to rebuild?".
+
 ---
 
 ## 4. Orchestrator Support Functions (`Run-FullAssessment.ps1`)
@@ -250,6 +366,8 @@ requires no additional Google Cloud project configuration.
 
 ## 6. Output Files (`output/` folder)
 
+**Main (My Drive) pipeline:**
+
 | File | Produced by | Contents |
 |---|---|---|
 | `GSites_Inventory_Min.csv` | Step 1 | Quick id/name/mimetype sanity check |
@@ -262,3 +380,64 @@ requires no additional Google Cloud project configuration.
 | `GSites_Manifest.csv` | Step 6 (manual) | Consolidated per-site manifest joining all reports above |
 | `gam_target_users.csv` | Step 1 (orchestrator) | Generated user-email list passed to GAM when scoping to specific users |
 | `GSites_Inventory_Detailed.csv.full` | Orchestrator | Backup of the full (unfiltered) inventory when `-SelectedSitesCsv` is used |
+
+**Standalone Shared Drive pipeline:**
+
+| File | Produced by | Contents |
+|---|---|---|
+| `GSites_SharedDrive_Inventory.csv` | `01d` (deduped) | Per-site metadata for sites on the specified Shared Drives |
+| `GSites_SharedDrive_Permissions.csv` | `01d` (deduped) | One row per (site, grantee), including direct-vs-inherited detail |
+| `GSites_SharedDrive_Settings.csv` | `01e` | One row per drive: sharing restrictions |
+| `GSites_SharedDrive_Organizers.csv` | `01e` | One row per (drive, organizer) |
+| `GSites_SharedDrive_Complexity_Report.csv` | `05b` | Per-site score (security-only, see §3.10) |
+| `GSites_SharedDrive_Manifest.csv` | `06_generate_manifest.ps1` (manual) | Consolidated per-site manifest for Shared Drive sites |
+
+---
+
+## 7. Prerequisites & Setup
+
+Full step-by-step instructions are in `CUSTOMER_SETUP.md`. Summary of
+what's required before a first run:
+
+| Tool | Version | Used by |
+|---|---|---|
+| [GAM](https://github.com/GAM-team/GAM) | 7.x | Steps 1 (both pipelines) — all Google Workspace/Drive data export |
+| [Node.js](https://nodejs.org/) | 18+ | Steps 2–4 — crawling and browser auth |
+| [PowerShell](https://github.com/PowerShell/PowerShell) | 7.x (`pwsh`) | Orchestrators, scoring, manifest generation |
+| [gcloud CLI](https://cloud.google.com/sdk/docs/install) | any | Only for `-UseApiExtract` (OAuth token minting) |
+
+GAM path is resolved via `GAM_PATH` env var → `gam.cfg` file → system
+`PATH` (see `GAM_PATH_FIX.md`). Node dependencies (`playwright`,
+`csv-parse`, `csv-stringify`) and the Playwright Chromium browser are
+installed automatically by Step 2 of the main orchestrator, or manually via
+`npm install` + `npx playwright install chromium`. A one-time interactive
+browser login (`02_save_playwright_auth.js`) is required before any
+Playwright-based crawl; not needed for `-UseApiExtract` or the Shared
+Drive pipeline (neither crawls page content).
+
+---
+
+## 8. Directory Reference
+
+| File | Type | Role |
+|---|---|---|
+| `Run-FullAssessment.ps1` | PowerShell | Main pipeline orchestrator |
+| `Run-SharedDriveAssessment.ps1` | PowerShell | Shared Drive pipeline orchestrator |
+| `01_run_gam_exports.cmd` | Batch | My Drive GAM export |
+| `01d_run_gam_exports_shareddrive.cmd` | Batch | Shared Drive GAM export |
+| `01e_list_shareddrive_metadata.cmd` | Batch | Shared Drive metadata export |
+| `02_save_playwright_auth.js` | Node.js | Interactive browser login capture |
+| `03_crawl_sites.js` | Node.js | Playwright browser crawler |
+| `03b_api_extract_embeds.js` | Node.js | Sites API v1 fast extractor |
+| `05_score_sites.ps1` | PowerShell | Shared scoring engine (both pipelines) |
+| `05b_score_shareddrive_sites.ps1` | PowerShell | Shared Drive dedup + scoring wrapper |
+| `06_generate_manifest.ps1` | PowerShell | Consolidated per-site manifest (both pipelines) |
+| `gam.cfg` | Config | Local `GAM_PATH` override (not committed with real paths) |
+| `package.json` | Config | Node dependencies (`playwright`, `csv-parse`, `csv-stringify`) |
+| `CUSTOMER_SETUP.md` | Docs | Step-by-step setup and run instructions |
+| `GAM_PATH_FIX.md` | Docs | Why/how `GAM_PATH` resolution was fixed |
+| `GAM_DOCUMENTATION.md` | Docs | Deep dive into every GAM command/flag used, and why |
+| `TOOLKIT_DOCUMENTATION.md` | Docs | This file — full pipeline design and behavior |
+| `output/` | Folder | All generated CSV reports (created on first run) |
+| `logs/` | Folder | Per-step stdout/stderr logs from the orchestrators |
+| `.auth/state.json` | Generated | Saved Playwright browser session (not committed) |
