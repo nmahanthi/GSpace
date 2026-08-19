@@ -939,8 +939,15 @@ function Invoke-AutoReSharePhase {
                     sendInvitation = $true
                     roles          = $roles
                 }
+                # Serialize to a JSON string ourselves and send it as raw text.
+                # Passing the hashtable directly to -Body makes Invoke-MgGraphRequest
+                # serialize it internally, which throws "Self referencing loop
+                # detected for property 'Value' ... Path 'recipients[0].email.Chars'"
+                # under Windows PowerShell 5.1 (its bundled Newtonsoft.Json walks
+                # into the ETS Chars indexer that 5.1 attaches to [string]).
+                $bodyJson = $body | ConvertTo-Json -Depth 10
                 try {
-                    Invoke-MgGraphRequest -Method POST -Uri "/v1.0/drives/$driveId/items/$($item.id)/invite" -Body $body -ErrorAction Stop | Out-Null
+                    Invoke-MgGraphRequest -Method POST -Uri "/v1.0/drives/$driveId/items/$($item.id)/invite" -Body $bodyJson -ContentType 'application/json' -ErrorAction Stop | Out-Null
                     Write-Ok "$($item.name): re-shared with $($recipientEmails -join ', ')"
                     $rows.Add([PSCustomObject]@{
                         Owner           = $u.UserPrincipalName
