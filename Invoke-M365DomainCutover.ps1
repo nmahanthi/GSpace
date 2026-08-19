@@ -914,6 +914,14 @@ function Invoke-AutoReSharePhase {
                 }
                 if (-not $recipientEmails) { continue }
 
+                # The owner permission on every item lists the file owner
+                # themselves with roles=['owner']. Graph's invite action only
+                # accepts read/write roles - passing 'owner' (or re-inviting
+                # the owner to their own file) always returns 400 BadRequest.
+                if ($perm.roles -contains 'owner') { continue }
+                $recipientEmails = @($recipientEmails | Where-Object { $_ -ne $u.Mail -and $_ -ne $u.UserPrincipalName })
+                if (-not $recipientEmails) { continue }
+
                 $roles = @(if ($perm.roles) { @($perm.roles) } else { @('read') })
                 $recipients = @($recipientEmails | ForEach-Object { @{ email = $_ } })
 
