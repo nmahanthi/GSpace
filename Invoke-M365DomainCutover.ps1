@@ -326,7 +326,11 @@ function Connect-PnPIfNeeded {
 }
 
 function Get-TargetUsers {
-    Connect-GraphIfNeeded
+    # Only needs Get-MgUser, which works under either delegated or app-only
+    # auth. Do not force a delegated re-connect if a session (of either kind)
+    # is already established - that would evict an app-only session (e.g.
+    # from AutoReShare) and pop an unwanted interactive sign-in.
+    if (-not $script:Connected.Graph) { Connect-GraphIfNeeded }
     $props = 'Id', 'DisplayName', 'UserPrincipalName', 'Mail', 'ProxyAddresses', 'AccountEnabled', 'OnPremisesSyncEnabled', 'UserType'
     if ($UserListCsv) {
         if (-not (Test-Path $UserListCsv)) { throw "UserListCsv not found: $UserListCsv" }
@@ -855,7 +859,10 @@ function Invoke-AutoReSharePhase {
         }
         $driveId = $drive.id
 
-        $childrenUri = "/v1.0/drives/$driveId/root/children?`$top=$MaxItemsPerDrive&`$expand=permissions"
+        # Note: $expand=permissions is not supported on driveItem/children by
+        # Microsoft Graph (returns 400 BadRequest) - permissions must be
+        # fetched per item via the dedicated /permissions endpoint instead.
+        $childrenUri = "/v1.0/drives/$driveId/root/children?`$top=$MaxItemsPerDrive"
         $items = New-Object System.Collections.Generic.List[object]
         try {
             do {
@@ -870,8 +877,18 @@ function Invoke-AutoReSharePhase {
         }
 
         foreach ($item in $items) {
-            if (-not $item.permissions) { continue }
-            foreach ($perm in $item.permissions) {
+            $permissions = $null
+            try {
+                $permResp = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/drives/$driveId/items/$($item.id)/permissions" -ErrorAction Stop
+                $permissions = @($permResp.value)
+            } catch {
+                Write-Warn "$($u.UserPrincipalName): $($item.name): could not list permissions: $($_.Exception.Message)"
+                Add-Action 'AutoReShare' $u.UserPrincipalName 'ListPermissions' $item.name 'Failed' $_.Exception.Message
+                continue
+            }
+            Start-Sleep -Milliseconds $ThrottleMs
+            if (-not $permissions) { continue }
+            foreach ($perm in $permissions) {
                 $recipientEmails = @()
                 if ($perm.grantedToV2.user.email) { $recipientEmails += $perm.grantedToV2.user.email }
                 if ($perm.grantedToIdentitiesV2) {
