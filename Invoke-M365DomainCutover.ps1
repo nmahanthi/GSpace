@@ -34,6 +34,12 @@
                  owner. "Anyone in the org" / "Anyone with the link" shares
                  cannot be resolved to recipients by Graph and are reported
                  as NeedsManualReshare instead of being skipped silently.
+                 REQUIRES APP-ONLY AUTH (-TenantId, -ClientId, -ClientSecret).
+                 Reading another user's drive (/users/{id}/drive) is blocked by
+                 Microsoft Graph under delegated auth, even for a Global
+                 Administrator signed in interactively - this returns 403
+                 Forbidden. It is not a permissions/consent problem; app-only
+                 (client credentials) auth is the only supported path.
       Rename     Optional SharePoint tenant rename to <NewSpoName>.sharepoint.com.
 
     IMPORTANT - what cannot be done:
@@ -57,10 +63,24 @@
 .PARAMETER AdminUrl
     SharePoint Online admin URL, e.g. https://kaaratech-admin.sharepoint.com.
 .PARAMETER ClientId
-    Entra ID application (client) ID used for PnP interactive sign-in. Since
+    Entra ID application (client) ID. Used for PnP interactive sign-in (Since
     Sept 9 2024 PnP PowerShell requires your own app registration. Register once:
       Register-PnPEntraIDAppForInteractiveLogin -ApplicationName "PnP.PowerShell" -Tenant <tenant>.onmicrosoft.com
-    Falls back to ENTRAID_APP_ID / ENTRAID_CLIENT_ID / AZURE_CLIENT_ID.
+    ), and, together with -TenantId and -ClientSecret, for app-only
+    Graph auth required by the AutoReShare phase. Falls back to
+    ENTRAID_APP_ID / ENTRAID_CLIENT_ID / AZURE_CLIENT_ID.
+.PARAMETER TenantId
+    Entra ID tenant ID or verified domain (e.g. kaaratech.onmicrosoft.com).
+    Required for AutoReShare's app-only Graph connection.
+.PARAMETER ClientSecret
+    Client secret (as a SecureString) of an Entra ID app registration that has
+    been granted the Files.ReadWrite.All and Sites.ReadWrite.All Graph
+    APPLICATION permissions with admin consent. Required for AutoReShare -
+    delegated auth (even as a Global Administrator) cannot read another
+    user's OneDrive; Graph returns 403 Forbidden for /users/{id}/drive under
+    delegated auth by design. Pass as a SecureString, e.g.:
+      -ClientSecret (ConvertTo-SecureString "<secret>" -AsPlainText -Force)
+    or omit it and let the script prompt securely.
 .PARAMETER UserListCsv
     Optional CSV with a UserPrincipalName column, used to run AddAlias and
     SetPrimary in controlled waves. Omit to target every user on OldDomain.
@@ -90,9 +110,10 @@
     .\Invoke-M365DomainCutover.ps1 -Phase SetPrimary -UserListCsv .\wave1.csv -OldDomain kaaratech.com -NewDomain kaara.ai -Apply
     .\Invoke-M365DomainCutover.ps1 -Phase Validate,ReShare -OldDomain kaaratech.com -NewDomain kaara.ai -AdminUrl https://kaaratech-admin.sharepoint.com -ClientId <appId>
 .EXAMPLE
-    # 3b. Automatically re-share named-recipient links that broke, dry run then apply
-    .\Invoke-M365DomainCutover.ps1 -Phase AutoReShare -UserListCsv .\wave1.csv -OldDomain kaaratech.com -NewDomain kaara.ai -AdminUrl https://kaaratech-admin.sharepoint.com -ClientId <appId>
-    .\Invoke-M365DomainCutover.ps1 -Phase AutoReShare -UserListCsv .\wave1.csv -OldDomain kaaratech.com -NewDomain kaara.ai -AdminUrl https://kaaratech-admin.sharepoint.com -ClientId <appId> -Apply
+    # 3b. Automatically re-share named-recipient links that broke (app-only auth required), dry run then apply
+    .\Invoke-M365DomainCutover.ps1 -Phase AutoReShare -UserListCsv .\wave1.csv -OldDomain kaaratech.com -NewDomain kaara.ai -TenantId <tenantId> -ClientId <appOnlyAppId>
+    .\Invoke-M365DomainCutover.ps1 -Phase AutoReShare -UserListCsv .\wave1.csv -OldDomain kaaratech.com -NewDomain kaara.ai -TenantId <tenantId> -ClientId <appOnlyAppId> -Apply
+    # (prompts securely for the client secret; or pass -ClientSecret (ConvertTo-SecureString "<secret>" -AsPlainText -Force))
 .EXAMPLE
     # 4. Optional SharePoint rename, run on its own change window
     .\Invoke-M365DomainCutover.ps1 -Phase Rename -NewSpoName kaara -OldDomain kaaratech.com -NewDomain kaara.ai -AdminUrl https://kaaratech-admin.sharepoint.com -Apply
@@ -101,6 +122,20 @@
               (AutoReShare uses Microsoft Graph REST calls directly via Invoke-MgGraphRequest;
               no extra module beyond Microsoft.Graph is required.)
     Roles:    Global Administrator (or User Admin + Exchange Admin + SharePoint Admin)
+              for every phase except AutoReShare, which authenticates as an
+              Entra ID app (see below) rather than an admin's own account.
+
+    AutoReShare app-only setup (one-time):
+      1. App registrations > New registration (e.g. "M365DomainCutover-AutoReShare").
+      2. API permissions > Microsoft Graph > Application permissions:
+           User.Read.All, Files.ReadWrite.All, Sites.ReadWrite.All
+         Grant admin consent.
+      3. Certificates & secrets > Client secrets > New client secret. Copy the
+         Value immediately - it is shown only once. Store it in a secret
+         manager, not in plain text.
+      4. Note the Application (client) ID and the tenant ID.
+      5. Pass them as -ClientId, -TenantId to AutoReShare, and either supply
+         -ClientSecret as a SecureString or let the script prompt for it.
 #>
 
 [CmdletBinding()]
@@ -123,6 +158,12 @@ param(
 
     [Parameter(Mandatory = $false)]
     [string]$ClientId,
+
+    [Parameter(Mandatory = $false)]
+    [string]$TenantId,
+
+    [Parameter(Mandatory = $false)]
+    [System.Security.SecureString]$ClientSecret,
 
     [Parameter(Mandatory = $false)]
     [string]$UserListCsv,
@@ -148,7 +189,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:ActionLog = New-Object System.Collections.Generic.List[object]
-$script:Connected = @{ Graph = $false; Exchange = $false; SPO = $false; PnP = $false }
+$script:Connected = @{ Graph = $false; GraphAppOnly = $false; Exchange = $false; SPO = $false; PnP = $false }
 
 # =============================================================================
 # Helpers
@@ -207,13 +248,44 @@ function Assert-Module {
 }
 
 function Connect-GraphIfNeeded {
-    if ($script:Connected.Graph) { return }
+    if ($script:Connected.Graph -and -not $script:Connected.GraphAppOnly) { return }
     Assert-Module 'Microsoft.Graph'
+    if ($script:Connected.GraphAppOnly) {
+        Disconnect-MgGraph | Out-Null
+        $script:Connected.GraphAppOnly = $false
+    }
     Write-Step 'Connecting to Microsoft Graph'
-    $scopes = @('User.ReadWrite.All', 'Domain.ReadWrite.All', 'Group.Read.All', 'Organization.Read.All', 'Files.ReadWrite.All', 'Sites.ReadWrite.All')
+    $scopes = @('User.ReadWrite.All', 'Domain.ReadWrite.All', 'Group.Read.All', 'Organization.Read.All')
     Connect-MgGraph -Scopes $scopes -NoWelcome
     $script:Connected.Graph = $true
-    Write-Ok 'Microsoft Graph'
+    Write-Ok 'Microsoft Graph (delegated)'
+}
+
+function Connect-GraphAppOnlyIfNeeded {
+    # AutoReShare must read other users' OneDrive content (/users/{id}/drive).
+    # Microsoft Graph rejects this under delegated auth with 403 Forbidden,
+    # even for a signed-in Global Administrator - it is only reachable with
+    # app-only (client credentials) auth. See:
+    # https://learn.microsoft.com/en-us/answers/questions/1103195
+    if ($script:Connected.GraphAppOnly) { return }
+    Assert-Module 'Microsoft.Graph'
+    if (-not $TenantId -or -not $ClientId) {
+        throw "AutoReShare requires app-only Graph auth: pass -TenantId, -ClientId and -ClientSecret for an Entra ID app registration granted the Files.ReadWrite.All and Sites.ReadWrite.All APPLICATION permissions with admin consent. Delegated sign-in (even as Global Administrator) cannot read another user's OneDrive and will return 403 Forbidden."
+    }
+    $secret = $ClientSecret
+    if (-not $secret) {
+        $secret = Read-Host -Prompt "Client secret for app $ClientId" -AsSecureString
+    }
+    $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $secret)
+    if ($script:Connected.Graph) {
+        Disconnect-MgGraph | Out-Null
+        $script:Connected.Graph = $false
+    }
+    Write-Step 'Connecting to Microsoft Graph (app-only)'
+    Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -NoWelcome
+    $script:Connected.GraphAppOnly = $true
+    $script:Connected.Graph = $true
+    Write-Ok 'Microsoft Graph (app-only)'
 }
 
 function Connect-ExchangeIfNeeded {
@@ -757,7 +829,9 @@ function Invoke-ReSharePhase {
 
 function Invoke-AutoReSharePhase {
     Write-Banner 'PHASE: AUTORESHARE (re-share OneDrive items via Microsoft Graph invite)'
-    Connect-GraphIfNeeded
+    Write-Detail 'Requires an Entra ID app registration granted these Graph APPLICATION permissions with admin consent:'
+    Write-Detail '  User.Read.All, Files.ReadWrite.All, Sites.ReadWrite.All'
+    Connect-GraphAppOnlyIfNeeded
     Write-Detail 'Named-recipient shares (including Teams chat file shares) are re-invited automatically.'
     Write-Detail 'Anyone-in-org / anyone-with-link shares cannot be resolved to recipients and are reported as NeedsManualReshare.'
     Write-Warn "Apply=$($Apply.IsPresent) - each successful re-share sends a new-link email to the original recipients."
