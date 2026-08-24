@@ -71,7 +71,7 @@
 .PARAMETER SupportContact
     Text shown in the notification email for who to contact if the user has
     trouble signing in, e.g. "the IT helpdesk at helpdesk@kaara.ai".
-    Defaults to "the Head of Admin at venugopal.a@kaaratech.com".
+    Defaults to "Head Of Administration at venugopal.a@kaaratech.com".
 
 .PARAMETER RunAutoReShare
     After all UPN changes are applied, automatically run the AutoReShare
@@ -102,7 +102,7 @@
     # Apply for real, and email each user about their new sign-in ID
     .\Update-UserUpn.ps1 -UserListCsv .\Users.csv -NewDomain kaara.ai -Apply `
         -SendNotificationEmail -SendFromMailbox itadmin@kaara.ai `
-        -SupportContact "the Head of Admin at venugopal.a@kaaratech.com"
+        -SupportContact "Head Of Administration venugopal.a@kaaratech.com"
 
 .EXAMPLE
     # Apply, notify users, and auto-reshare their files afterwards
@@ -137,7 +137,7 @@ param(
     [string]$SendFromMailbox,
 
     [Parameter(Mandatory = $false)]
-    [string]$SupportContact = 'the Head of Admin at venugopal.a@kaaratech.com',
+    [string]$SupportContact = 'Head Of Administration at venugopal.a@kaaratech.com',
 
     [Parameter(Mandatory = $false)]
     [switch]$RunAutoReShare,

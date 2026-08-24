@@ -1,0 +1,2 @@
+"Timestamp","DisplayName","OldUserPrincipalName","NewUserPrincipalName","Status","Detail","Error"
+"2026-08-24 16:03:09","","aashish.kumar@kaaratech.com","","Failed","User not found","[Request_ResourceNotFound] : Resource 'aashish.kumar@kaaratech.com' does not exist or one of its queried reference-property objects are not present."
