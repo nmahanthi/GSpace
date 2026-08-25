@@ -210,14 +210,21 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
     throw "Required module 'Microsoft.Graph.Authentication' is not installed. Run: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser"
 }
 
+$requiredScopes = @('Policy.ReadWrite.ApplicationConfiguration', 'Directory.ReadWrite.All')
 $connectedHere = $false
 try {
-    if (-not (Get-MgContext)) {
+    $ctx = Get-MgContext
+    $missingScopes = @($requiredScopes | Where-Object { $ctx.Scopes -notcontains $_ })
+    if (-not $ctx -or $missingScopes.Count -gt 0) {
+        if ($ctx) {
+            Write-Warn "Existing Microsoft Graph session is missing required scope(s): $($missingScopes -join ', ') - reconnecting."
+            try { Disconnect-MgGraph | Out-Null } catch { }
+        }
         Write-Step 'Connecting to Microsoft Graph'
-        Connect-MgGraph -Scopes 'Policy.ReadWrite.ApplicationConfiguration', 'Directory.ReadWrite.All' -NoWelcome
+        Connect-MgGraph -Scopes $requiredScopes -NoWelcome
         $connectedHere = $true
     } else {
-        Write-Detail "Using existing Microsoft Graph session ($((Get-MgContext).Account))"
+        Write-Detail "Using existing Microsoft Graph session ($($ctx.Account))"
     }
 
     Write-Host ""
