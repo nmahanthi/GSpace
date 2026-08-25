@@ -95,30 +95,39 @@ function Test-AlternateIdLoginEnabled {
 
 function Show-Status {
     Write-Step 'Staged rollout (pilot) policy for EmailAsAlternateId'
-    $rollout = @(Get-FeatureRolloutPolicies)
-    if ($rollout.Count -eq 0) {
-        Write-Detail 'None configured.'
-    } else {
-        foreach ($p in $rollout) {
-            Write-Detail "Id=$($p.id)  DisplayName='$($p.displayName)'  IsEnabled=$($p.isEnabled)"
-            $applies = @((Invoke-MgGraphRequest -Method GET -Uri "/beta/policies/featureRolloutPolicies/$($p.id)/appliesTo").value)
-            if ($applies.Count -eq 0) {
-                Write-Detail '  (no groups assigned yet)'
-            } else {
-                foreach ($g in $applies) { Write-Detail "  -> group $($g.id)" }
+    try {
+        $rollout = @(Get-FeatureRolloutPolicies)
+        if ($rollout.Count -eq 0) {
+            Write-Detail 'None configured.'
+        } else {
+            foreach ($p in $rollout) {
+                Write-Detail "Id=$($p.id)  DisplayName='$($p.displayName)'  IsEnabled=$($p.isEnabled)"
+                $applies = @((Invoke-MgGraphRequest -Method GET -Uri "/beta/policies/featureRolloutPolicies/$($p.id)/appliesTo").value)
+                if ($applies.Count -eq 0) {
+                    Write-Detail '  (no groups assigned yet)'
+                } else {
+                    foreach ($g in $applies) { Write-Detail "  -> group $($g.id)" }
+                }
             }
         }
+    } catch {
+        Write-Warn "Could not read staged rollout policies (needs Directory.ReadWrite.All with admin consent, typically Global Administrator): $($_.Exception.Message)"
+        Write-Detail 'This does not affect the org-wide Home Realm Discovery policy below.'
     }
 
     Write-Step 'Org-wide Home Realm Discovery policy'
-    $hrd = @(Get-HomeRealmDiscoveryPolicies)
-    if ($hrd.Count -eq 0) {
-        Write-Detail 'No HomeRealmDiscoveryPolicy exists - email-as-alternate-login-id is NOT enabled tenant-wide.'
-    } else {
-        foreach ($p in $hrd) {
-            $enabled = Test-AlternateIdLoginEnabled -HrdPolicy $p
-            Write-Detail "Id=$($p.id)  DisplayName='$($p.displayName)'  IsOrganizationDefault=$($p.isOrganizationDefault)  AlternateIdLogin.Enabled=$enabled"
+    try {
+        $hrd = @(Get-HomeRealmDiscoveryPolicies)
+        if ($hrd.Count -eq 0) {
+            Write-Detail 'No HomeRealmDiscoveryPolicy exists - email-as-alternate-login-id is NOT enabled tenant-wide.'
+        } else {
+            foreach ($p in $hrd) {
+                $enabled = Test-AlternateIdLoginEnabled -HrdPolicy $p
+                Write-Detail "Id=$($p.id)  DisplayName='$($p.displayName)'  IsOrganizationDefault=$($p.isOrganizationDefault)  AlternateIdLogin.Enabled=$enabled"
+            }
         }
+    } catch {
+        Write-Fail "Could not read Home Realm Discovery policy: $($_.Exception.Message)"
     }
 }
 
