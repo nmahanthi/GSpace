@@ -69,6 +69,11 @@
     Max seconds to wait for each server-side copy job to complete before
     treating it as failed. Default: 180.
 
+.PARAMETER GraphClientTimeoutSec
+    Seconds to wait for the Graph/Azure AD token request before giving up
+    (Connect-MgGraph -ClientTimeout). Raise this on slow/high-latency links.
+    Default: 100 (the Microsoft.Graph.Authentication default).
+
 .PARAMETER Apply
     Actually perform the copies. Without this switch, the script only
     reports what it would copy.
@@ -105,6 +110,7 @@ param(
     [int]$MaxItemsPerUser    = 0,
     [int]$ThrottleMs         = 250,
     [int]$MonitorTimeoutSec  = 180,
+    [int]$GraphClientTimeoutSec = 100,
     [switch]$Apply,
     [string]$OutputCsv = (Join-Path $PSScriptRoot "OneDriveBackupReport_$(Get-Date -f 'yyyyMMdd_HHmmss').csv")
 )
@@ -140,12 +146,22 @@ function Connect-GraphAppOnly {
     $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $secret)
     Write-Log "Connecting to Microsoft Graph (app-only, Tenant: $TenantId, ClientId: $ClientId) ..."
     try {
-        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -NoWelcome -ErrorAction Stop
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -ClientTimeout $GraphClientTimeoutSec -NoWelcome -ErrorAction Stop
     } catch {
         $full = $_.Exception.ToString()
         if ($_.Exception.InnerException) { $full += "`n--- Inner ---`n" + $_.Exception.InnerException.ToString() }
         Write-Log "Full error detail:`n$full" "ERROR"
-        Write-Log @"
+        if ($full -match "request_timeout|TaskCanceledException|HttpClient.Timeout") {
+            Write-Log @"
+This is a NETWORK-LEVEL timeout reaching Azure AD (login.microsoftonline.com) - not a wrong secret/ClientId. The token request never got a response at all (StatusCode: 0). Likely causes on this machine/network:
+  - A corporate proxy or firewall is blocking/inspecting outbound HTTPS to login.microsoftonline.com and graph.microsoft.com. Ask network/security to allow those hosts.
+  - VPN or SSL-inspection software silently drops the TLS handshake - try from a different network (e.g. mobile hotspot) to confirm.
+  - If this machine needs a proxy to reach the internet, .NET's HttpClient needs it configured system-wide, e.g.: netsh winhttp import proxy source=ie, or set the HTTPS_PROXY environment variable in a NEW PowerShell window before running this script.
+  - Confirm basic connectivity first: Test-NetConnection login.microsoftonline.com -Port 443
+  - You can raise the wait (helps on slow/high-latency links, will not fix a real block) by re-running with -GraphClientTimeoutSec 300.
+"@ "WARN"
+        } else {
+            Write-Log @"
 Common causes for 'ClientSecretCredential authentication failed':
   - AADSTS7000215 / AADSTS7000222: secret value is wrong, expired, or you pasted the Secret ID instead of the Secret Value (Entra ID > App registrations > your app > Certificates & secrets - the VALUE is only shown once at creation).
   - AADSTS700016: ClientId does not match an app registration in this tenant, or TenantId is wrong.
@@ -153,6 +169,7 @@ Common causes for 'ClientSecretCredential authentication failed':
   - AADSTS65001 / permissions not consented: the app's API permissions (User.Read.All, Files.ReadWrite.All, Sites.ReadWrite.All - Application type) need admin consent granted (Grant admin consent button in the Azure Portal).
   - Module too old: Update-Module Microsoft.Graph.Authentication
 "@ "WARN"
+        }
         throw
     }
     Write-Log "Connected." "SUCCESS"
