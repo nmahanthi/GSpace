@@ -138,8 +138,23 @@ function Connect-GraphAppOnly {
         $secret = Read-Host -Prompt "Client secret for app $ClientId" -AsSecureString
     }
     $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $secret)
-    Write-Log "Connecting to Microsoft Graph (app-only) ..."
-    Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -NoWelcome -ErrorAction Stop
+    Write-Log "Connecting to Microsoft Graph (app-only, Tenant: $TenantId, ClientId: $ClientId) ..."
+    try {
+        Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -NoWelcome -ErrorAction Stop
+    } catch {
+        $full = $_.Exception.ToString()
+        if ($_.Exception.InnerException) { $full += "`n--- Inner ---`n" + $_.Exception.InnerException.ToString() }
+        Write-Log "Full error detail:`n$full" "ERROR"
+        Write-Log @"
+Common causes for 'ClientSecretCredential authentication failed':
+  - AADSTS7000215 / AADSTS7000222: secret value is wrong, expired, or you pasted the Secret ID instead of the Secret Value (Entra ID > App registrations > your app > Certificates & secrets - the VALUE is only shown once at creation).
+  - AADSTS700016: ClientId does not match an app registration in this tenant, or TenantId is wrong.
+  - AADSTS90002: TenantId not found - use the tenant GUID or a verified domain (e.g. contoso.onmicrosoft.com), not the friendly display name.
+  - AADSTS65001 / permissions not consented: the app's API permissions (User.Read.All, Files.ReadWrite.All, Sites.ReadWrite.All - Application type) need admin consent granted (Grant admin consent button in the Azure Portal).
+  - Module too old: Update-Module Microsoft.Graph.Authentication
+"@ "WARN"
+        throw
+    }
     Write-Log "Connected." "SUCCESS"
 }
 
