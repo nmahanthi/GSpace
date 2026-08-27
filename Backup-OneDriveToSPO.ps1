@@ -16,6 +16,11 @@
     action (no file content passes through this machine), and each copy
     job is polled to completion before moving to the next file.
 
+    Runs in two phases: (1) discovers every file for every user first, so
+    the totals are known up front, then (2) copies them while showing a
+    status bar with % complete, files pending, elapsed time and an ETA
+    (also logged to the console every 25 files).
+
     AUTHENTICATION
     Reading another user's OneDrive (/users/{id}/drive) is blocked under
     delegated auth (403 Forbidden), even for a signed-in Global
@@ -307,6 +312,13 @@ function Copy-DriveItemAndWait {
     throw "Copy job timed out after $MonitorTimeoutSec sec."
 }
 
+# ── Format a TimeSpan as d.hh:mm:ss (days omitted when zero) ─────────────────
+function Format-Duration {
+    param([TimeSpan]$Span)
+    if ($Span.TotalDays -ge 1) { return $Span.ToString("d\.hh\:mm\:ss") }
+    return $Span.ToString("hh\:mm\:ss")
+}
+
 # =============================================================================
 # MAIN
 # =============================================================================
@@ -324,12 +336,16 @@ Write-Log "$($targets.Count) users in scope from $UserListCsv"
 $results = New-Object System.Collections.Generic.List[object]
 $baseSegments = @($DestinationBaseFolder -split '/' | Where-Object { $_ })
 
+# ── Phase 1: discovery - enumerate every file for every user first, so the
+#    overall %, pending count and ETA in Phase 2 are accurate from the start.
+#    No destination writes happen in this phase. ──────────────────────────────
+Write-Log "Phase 1/2: discovering files across $($targets.Count) user(s) ..."
+$work = New-Object System.Collections.Generic.List[object]
 $u = 0
 foreach ($target in $targets) {
     $u++
     $upn = $target.UserPrincipalName
-    Write-Progress -Activity "OneDrive Backup" -Status $upn -PercentComplete (($u / [Math]::Max($targets.Count, 1)) * 100)
-    Write-Log "[$upn] Starting ..."
+    Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Status "$upn ($u of $($targets.Count))" -PercentComplete (($u / [Math]::Max($targets.Count, 1)) * 100)
 
     try {
         $drive = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/users/$upn/drive" -ErrorAction Stop
@@ -341,25 +357,10 @@ foreach ($target in $targets) {
         })
         continue
     }
-    $sourceDriveId = $drive.id
-
-    $userFolderId = $null
-    if ($Apply) {
-        try {
-            $userFolderId = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $target.FolderName)
-        } catch {
-            Write-Log "[$upn] Could not create destination folder, skipped: $($_.Exception.Message)" "ERROR"
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $target.FolderName
-                File = ""; RelativeFolder = ""; Status = "Failed"; Detail = "CreateFolder: $($_.Exception.Message)"
-            })
-            continue
-        }
-    }
 
     $count = 0
     try {
-        $files = Get-DriveFilesRecursive -DriveId $sourceDriveId -Count ([ref]$count)
+        $files = Get-DriveFilesRecursive -DriveId $drive.id -Count ([ref]$count)
     } catch {
         Write-Log "[$upn] Could not enumerate OneDrive files: $($_.Exception.Message)" "ERROR"
         $results.Add([PSCustomObject]@{
@@ -369,63 +370,103 @@ foreach ($target in $targets) {
         continue
     }
     Write-Log "[$upn] $($files.Count) file(s) found."
-
-    $ok = 0; $skip = 0; $fail = 0
-    foreach ($file in $files) {
-        if (-not $Apply) {
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $target.FolderName
-                File = $file.Name; RelativeFolder = $file.RelativeFolder
-                Status = "WhatIf"; Detail = "Would copy to $DestinationLibrary/$($target.FolderName)/$($file.RelativeFolder)"
-            })
-            continue
-        }
-        $targetFolderId = $userFolderId
-        try {
-            if ($file.RelativeFolder) {
-                $targetFolderId = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $target.FolderName + ($file.RelativeFolder -split '/' | Where-Object { $_ }))
-            }
-        } catch {
-            $fail++
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $target.FolderName
-                File = $file.Name; RelativeFolder = $file.RelativeFolder
-                Status = "Failed"; Detail = "CreateSubfolder: $($_.Exception.Message)"
-            })
-            continue
-        }
-        try {
-            Copy-DriveItemAndWait -SourceDriveId $sourceDriveId -ItemId $file.Id -DestDriveId $destDriveId -DestFolderId $targetFolderId -Name $file.Name
-            $ok++
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $target.FolderName
-                File = $file.Name; RelativeFolder = $file.RelativeFolder
-                Status = "Success"; Detail = ""
-            })
-        } catch {
-            $msg = $_.Exception.Message
-            if ($msg -like "*nameAlreadyExists*") {
-                $skip++
-                $results.Add([PSCustomObject]@{
-                    UserPrincipalName = $upn; FolderName = $target.FolderName
-                    File = $file.Name; RelativeFolder = $file.RelativeFolder
-                    Status = "Skipped"; Detail = "Already exists at destination"
-                })
-            } else {
-                $fail++
-                Write-Log "[$upn] $($file.Name): copy failed: $msg" "ERROR"
-                $results.Add([PSCustomObject]@{
-                    UserPrincipalName = $upn; FolderName = $target.FolderName
-                    File = $file.Name; RelativeFolder = $file.RelativeFolder
-                    Status = "Failed"; Detail = $msg
-                })
-            }
-        }
-        Start-Sleep -Milliseconds $ThrottleMs
+    foreach ($f in $files) {
+        $work.Add([PSCustomObject]@{
+            UserPrincipalName = $upn; FolderName = $target.FolderName; SourceDriveId = $drive.id
+            FileId = $f.Id; FileName = $f.Name; RelativeFolder = $f.RelativeFolder
+        })
     }
-    Write-Log "[$upn] Done. Success=$ok Skipped=$skip Failed=$fail" "SUCCESS"
 }
-Write-Progress -Activity "OneDrive Backup" -Completed
+Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Completed
+
+$totalWork = $work.Count
+Write-Log "Phase 1/2 complete: $totalWork file(s) to process across $($targets.Count) user(s)." "SUCCESS"
+
+# ── Phase 2: copy (or report, in dry run) each file, with an overall status
+#    bar showing % complete, files pending and an ETA based on the running
+#    average time per file. Folder lookups are cached per user/sub-folder so
+#    repeat files in the same folder don't re-walk the destination tree. ─────
+$userFolderCache = @{}
+$subFolderCache  = @{}
+$sw = [Diagnostics.Stopwatch]::StartNew()
+$done = 0; $ok = 0; $skip = 0; $fail = 0
+$perUserOk = @{}; $perUserSkip = @{}; $perUserFail = @{}
+
+foreach ($item in $work) {
+    $done++
+    $pending = $totalWork - $done
+    $pct = if ($totalWork -gt 0) { [Math]::Round(($done / $totalWork) * 100, 1) } else { 100 }
+    $avgPerItemSec = if ($done -gt 0) { $sw.Elapsed.TotalSeconds / $done } else { 0 }
+    $etaStr = if ($done -lt 3) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds([Math]::Max(0, $avgPerItemSec * $pending))) }
+    $status = "$done/$totalWork done ($pct%) | Pending: $pending | Elapsed: $(Format-Duration $sw.Elapsed) | ETA: $etaStr"
+    Write-Progress -Id 2 -Activity "OneDrive Backup" -Status $status -PercentComplete $pct -CurrentOperation "$($item.UserPrincipalName): $($item.FileName)"
+    if ($done % 25 -eq 0 -or $done -eq $totalWork) {
+        Write-Log "Progress: $status"
+    }
+
+    $upn = $item.UserPrincipalName
+
+    if (-not $Apply) {
+        $results.Add([PSCustomObject]@{
+            UserPrincipalName = $upn; FolderName = $item.FolderName
+            File = $item.FileName; RelativeFolder = $item.RelativeFolder
+            Status = "WhatIf"; Detail = "Would copy to $DestinationLibrary/$($item.FolderName)/$($item.RelativeFolder)"
+        })
+        continue
+    }
+
+    try {
+        if (-not $userFolderCache.ContainsKey($item.FolderName)) {
+            $userFolderCache[$item.FolderName] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName)
+        }
+        $targetFolderId = $userFolderCache[$item.FolderName]
+        if ($item.RelativeFolder) {
+            $subKey = "$($item.FolderName)|$($item.RelativeFolder)"
+            if (-not $subFolderCache.ContainsKey($subKey)) {
+                $subFolderCache[$subKey] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName + ($item.RelativeFolder -split '/' | Where-Object { $_ }))
+            }
+            $targetFolderId = $subFolderCache[$subKey]
+        }
+    } catch {
+        $fail++; $perUserFail[$upn] = ($perUserFail[$upn] + 1)
+        $results.Add([PSCustomObject]@{
+            UserPrincipalName = $upn; FolderName = $item.FolderName
+            File = $item.FileName; RelativeFolder = $item.RelativeFolder
+            Status = "Failed"; Detail = "CreateFolder: $($_.Exception.Message)"
+        })
+        continue
+    }
+
+    try {
+        Copy-DriveItemAndWait -SourceDriveId $item.SourceDriveId -ItemId $item.FileId -DestDriveId $destDriveId -DestFolderId $targetFolderId -Name $item.FileName
+        $ok++; $perUserOk[$upn] = ($perUserOk[$upn] + 1)
+        $results.Add([PSCustomObject]@{
+            UserPrincipalName = $upn; FolderName = $item.FolderName
+            File = $item.FileName; RelativeFolder = $item.RelativeFolder
+            Status = "Success"; Detail = ""
+        })
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -like "*nameAlreadyExists*") {
+            $skip++; $perUserSkip[$upn] = ($perUserSkip[$upn] + 1)
+            $results.Add([PSCustomObject]@{
+                UserPrincipalName = $upn; FolderName = $item.FolderName
+                File = $item.FileName; RelativeFolder = $item.RelativeFolder
+                Status = "Skipped"; Detail = "Already exists at destination"
+            })
+        } else {
+            $fail++; $perUserFail[$upn] = ($perUserFail[$upn] + 1)
+            Write-Log "[$upn] $($item.FileName): copy failed: $msg" "ERROR"
+            $results.Add([PSCustomObject]@{
+                UserPrincipalName = $upn; FolderName = $item.FolderName
+                File = $item.FileName; RelativeFolder = $item.RelativeFolder
+                Status = "Failed"; Detail = $msg
+            })
+        }
+    }
+    Start-Sleep -Milliseconds $ThrottleMs
+}
+Write-Progress -Id 2 -Activity "OneDrive Backup" -Completed
 
 $results | Export-Csv -Path $OutputCsv -NoTypeInformation -Encoding UTF8
 Write-Log "Report written: $OutputCsv" "SUCCESS"
@@ -435,5 +476,5 @@ $success = @($results | Where-Object { $_.Status -eq "Success" }).Count
 $skipped = @($results | Where-Object { $_.Status -eq "Skipped" }).Count
 $failed  = @($results | Where-Object { $_.Status -eq "Failed" }).Count
 $whatif  = @($results | Where-Object { $_.Status -eq "WhatIf" }).Count
-Write-Log "Summary: Total=$total Success=$success Skipped=$skipped Failed=$failed WhatIf=$whatif" "SUCCESS"
+Write-Log "Summary: Total=$total Success=$success Skipped=$skipped Failed=$failed WhatIf=$whatif | Total time: $(Format-Duration $sw.Elapsed)" "SUCCESS"
 if (-not $Apply) { Write-Log "This was a dry run. Re-run with -Apply to perform the copies." "WARN" }
