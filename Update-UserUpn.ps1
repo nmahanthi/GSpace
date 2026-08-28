@@ -308,12 +308,19 @@ try {
     $scopes = @('User.ReadWrite.All')
     if ($SendNotificationEmail) { $scopes += 'Mail.Send' }
 
-    if (-not (Get-MgContext)) {
+    $ctx = Get-MgContext
+    $missingScopes = @($scopes | Where-Object { $ctx.Scopes -notcontains $_ })
+    if (-not $ctx -or $ctx.AuthType -ne 'Delegated' -or $missingScopes.Count -gt 0) {
+        if ($ctx) {
+            $reason = if ($ctx.AuthType -ne 'Delegated') { "is app-only ($($ctx.AuthType)), not delegated" } else { "is missing scope(s): $($missingScopes -join ', ')" }
+            Write-Warn "Existing Microsoft Graph session $reason - reconnecting with a delegated session."
+            try { Disconnect-MgGraph | Out-Null } catch { }
+        }
         Write-Step 'Connecting to Microsoft Graph'
         Connect-MgGraph -Scopes $scopes -NoWelcome
         $connectedHere = $true
     } else {
-        Write-Detail "Using existing Microsoft Graph session ($((Get-MgContext).Account))"
+        Write-Detail "Using existing Microsoft Graph session ($($ctx.Account))"
     }
 
     if ($SendNotificationEmail) {
