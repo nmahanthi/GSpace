@@ -611,7 +611,7 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
             if (-not $monitorUrl) {
                 Add-BackupResult -Item $item -Status "Success" -Detail ""
             } else {
-                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; Started = [Diagnostics.Stopwatch]::StartNew() })
+                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; Started = [Diagnostics.Stopwatch]::StartNew(); LastLogSec = 0; PollErrors = 0 })
             }
         } catch {
             $msg = $_.Exception.Message
@@ -640,13 +640,29 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
             }
             $status = $null
             try { $status = Get-CopyJobStatus -MonitorUrl $entry.MonitorUrl }
-            catch { $stillPending.Add($entry); continue }
+            catch {
+                $entry.PollErrors++
+                # Log the actual error periodically instead of silently retrying
+                # forever - a copy that only ever fails to POLL (vs. one that is
+                # genuinely still running on Graph's side) looks identical in the
+                # final "timed out" message otherwise, and this is the difference
+                # between a slow copy and a broken monitor URL/permission issue.
+                if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
+                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): poll attempt $($entry.PollErrors) failed: $($_.Exception.Message)" "WARN"
+                }
+                $stillPending.Add($entry); continue
+            }
             if ($status.status -eq "completed") {
                 Add-BackupResult -Item $item -Status "Success" -Detail ""
             } elseif ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
                 Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) $($status.statusDescription)" "ERROR"
                 Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $($status.statusDescription)"
             } else {
+                $elapsedSec = [int]$entry.Started.Elapsed.TotalSeconds
+                if ($elapsedSec -ge $entry.LastLogSec + 30) {
+                    $entry.LastLogSec = $elapsedSec
+                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy still in progress after ${elapsedSec}s (status: $($status.status), $($status.percentageComplete)% complete)" "INFO"
+                }
                 $stillPending.Add($entry)
             }
         }
