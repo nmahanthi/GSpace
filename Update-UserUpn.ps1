@@ -420,6 +420,14 @@ try {
             Add-Result $user.DisplayName $oldUpn $newUpn 'Success' '' '' $notifyStatus $notifyDetail
         } catch {
             Write-Fail "UPN change failed for ${oldUpn}: $($_.Exception.Message)"
+            if ($_.Exception.Message -match 'Authorization_RequestDenied' -and -not $script:ShownRbacHint) {
+                $script:ShownRbacHint = $true
+                Write-Warn 'Authorization_RequestDenied means the signed-in account lacks a directory role that allows changing another users UserPrincipalName - consenting the User.ReadWrite.All delegated scope is not enough by itself, Graph also enforces Azure AD role-based access on top of it. Likely causes:'
+                Write-Detail 'The signed-in account needs the User Administrator (or Global Administrator) role in Entra ID > Roles and administrators.'
+                Write-Detail 'If that role was just assigned, this cached Graph session predates it - run Disconnect-MgGraph, then re-run so it signs in fresh.'
+                Write-Detail 'A User Administrator cannot modify accounts that themselves hold an admin role - only a Global Administrator can.'
+                Write-Detail 'If the failed users sit in a Restricted Management Administrative Unit, only admins scoped to that AU can modify them.'
+            }
             Add-Result $user.DisplayName $oldUpn $newUpn 'Failed' '' $_.Exception.Message
         }
         Start-Sleep -Milliseconds $ThrottleMs
