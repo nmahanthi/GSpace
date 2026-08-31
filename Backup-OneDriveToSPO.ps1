@@ -301,11 +301,16 @@ function Get-CopyJobStatus {
 # ── Graph app-only connection ────────────────────────────────────────────────
 function Connect-GraphAppOnly {
     Assert-Module "Microsoft.Graph.Authentication"
-    $secret = $ClientSecret
-    if (-not $secret) {
-        $secret = Read-Host -Prompt "Client secret for app $ClientId" -AsSecureString
+    # Prompt for the secret at most once per run; cache it so the periodic
+    # keep-alive refresh and any error-triggered reconnect reuse it instead
+    # of prompting again every time.
+    if (-not $script:CachedClientSecret) {
+        $script:CachedClientSecret = $ClientSecret
+        if (-not $script:CachedClientSecret) {
+            $script:CachedClientSecret = Read-Host -Prompt "Client secret for app $ClientId" -AsSecureString
+        }
     }
-    $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $secret)
+    $credential = New-Object System.Management.Automation.PSCredential ($ClientId, $script:CachedClientSecret)
     Write-Log "Connecting to Microsoft Graph (app-only, Tenant: $TenantId, ClientId: $ClientId) ..."
     try {
         Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $credential -ClientTimeout $GraphClientTimeoutSec -NoWelcome -ErrorAction Stop
