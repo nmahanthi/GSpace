@@ -13,8 +13,10 @@
          folder, preserving the original sub-folder structure.
 
     Copying is done server-side via the Microsoft Graph driveItem "copy"
-    action (no file content passes through this machine), and each copy
-    job is polled to completion before moving to the next file.
+    action (no file content passes through this machine). Copies are
+    pipelined in batches of -BatchSize: a batch's copy jobs are all fired
+    off first, then polled together, so the server-side wait time for many
+    files overlaps instead of being paid one file at a time.
 
     Runs in two phases: (1) discovers every file for every user first, so
     the totals are known up front, then (2) copies them while showing a
@@ -75,7 +77,16 @@
     Cap on the number of files copied per user; 0 = unlimited. Default: 0.
 
 .PARAMETER ThrottleMs
-    Delay between Graph calls to avoid throttling. Default: 250ms.
+    Delay between copy-job dispatches within a batch, to avoid throttling.
+    Default: 100ms.
+
+.PARAMETER BatchSize
+    Number of copy jobs kept in flight at once (fired off together, then
+    polled together) - the main lever for speeding up large backups, since
+    it overlaps the server-side copy wait time across many files instead of
+    waiting for each one before starting the next. Raise it for faster runs
+    if you are not seeing 429 (throttling) errors; lower it if you are.
+    Default: 10.
 
 .PARAMETER MonitorTimeoutSec
     Max seconds to wait for each server-side copy job to complete before
@@ -137,7 +148,8 @@ param(
     [Parameter(Mandatory)][string]$ClientId,
     [System.Security.SecureString]$ClientSecret,
     [int]$MaxItemsPerUser    = 0,
-    [int]$ThrottleMs         = 250,
+    [int]$ThrottleMs         = 100,
+    [int]$BatchSize          = 10,
     [int]$MonitorTimeoutSec  = 180,
     [int]$GraphClientTimeoutSec = 100,
     [int]$RequestTimeoutSec = 120,
@@ -254,8 +266,14 @@ function Invoke-GraphRequestSafe {
             $out = Invoke-WithHardTimeout -ScriptBlock $scriptBlock -Params $params -TimeoutSec $RequestTimeoutSec
             return $out[0]
         } catch {
-            if ($attempt -ge $MaxGraphRetries) { throw }
             $msg = $_.Exception.Message
+            # Permanent/expected errors - retrying wastes time (e.g. 30s of backoff)
+            # for an outcome that will never change, most commonly hit on re-runs
+            # where the file already exists at the destination. Fail fast instead.
+            if ($msg -match "nameAlreadyExists|invalidRequest|accessDenied|Forbidden|itemNotFound|resourceNotFound|malwareDetected|BadRequest|notAllowed") {
+                throw
+            }
+            if ($attempt -ge $MaxGraphRetries) { throw }
             Write-Log "Graph call attempt $attempt/$MaxGraphRetries failed ($Method $Uri): $msg. Retrying in $delay sec ..." "WARN"
             if ($msg -match "Timed out|Unauthorized|401|expired|token|Could not establish|SSL|connection") {
                 try { Connect-GraphAppOnly } catch { Write-Log "Reconnect attempt failed: $($_.Exception.Message)" "WARN" }
@@ -406,7 +424,7 @@ function Resolve-DriveFolder {
 function Get-DriveFilesRecursive {
     param([string]$DriveId, [string]$ItemId = "root", [string]$RelativeFolder = "", [ref]$Count)
     $results = New-Object System.Collections.Generic.List[object]
-    $uri = "/v1.0/drives/$DriveId/items/$ItemId/children?`$top=200"
+    $uri = "/v1.0/drives/$DriveId/items/$ItemId/children?`$top=999"
     while ($uri) {
         if ($MaxItemsPerUser -gt 0 -and $Count.Value -ge $MaxItemsPerUser) { break }
         $page = (Invoke-GraphRequestSafe -Method GET -Uri $uri).Result
@@ -425,8 +443,11 @@ function Get-DriveFilesRecursive {
     return $results
 }
 
-# ── Fire a server-side copy and wait for it to complete ──────────────────────
-function Copy-DriveItemAndWait {
+# ── Fire a server-side copy; returns a monitor URL to poll, or $null if the
+#    copy already completed synchronously (some tenants do this for small
+#    files). Does NOT wait for completion - callers pipeline many of these
+#    in a batch, then poll them all together (see Phase 2 below). ───────────
+function Start-DriveItemCopy {
     param([string]$SourceDriveId, [string]$ItemId, [string]$DestDriveId, [string]$DestFolderId, [string]$Name)
 
     $body = @{ parentReference = @{ driveId = $DestDriveId; id = $DestFolderId }; name = $Name } | ConvertTo-Json
@@ -435,20 +456,7 @@ function Copy-DriveItemAndWait {
 
     $location = $resp.Headers.Location
     if ($location -is [array]) { $location = $location[0] }
-    if (-not $location) { return }  # Some tenants complete the copy synchronously with no monitor URL.
-
-    $sw = [Diagnostics.Stopwatch]::StartNew()
-    while ($sw.Elapsed.TotalSeconds -lt $MonitorTimeoutSec) {
-        $status = $null
-        try { $status = Get-CopyJobStatus -MonitorUrl $location }
-        catch { Start-Sleep -Milliseconds 1000; continue }
-        if ($status.status -eq "completed") { return }
-        if ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
-            throw "Copy job status '$($status.status)': $($status.statusDescription)"
-        }
-        Start-Sleep -Milliseconds 1000
-    }
-    throw "Copy job timed out after $MonitorTimeoutSec sec."
+    return $location
 }
 
 # ── Format a TimeSpan as d.hh:mm:ss (days omitted when zero) ─────────────────
@@ -521,89 +529,124 @@ Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Completed
 $totalWork = $work.Count
 Write-Log "Phase 1/2 complete: $totalWork file(s) to process across $($targets.Count) user(s)." "SUCCESS"
 
-# ── Phase 2: copy (or report, in dry run) each file, with an overall status
-#    bar showing % complete, files pending and an ETA based on the running
-#    average time per file. Folder lookups are cached per user/sub-folder so
-#    repeat files in the same folder don't re-walk the destination tree. ─────
+# ── Phase 2: copy (or report, in dry run) files in batches of -BatchSize.
+#    All copy jobs in a batch are fired off first, then polled together, so
+#    the server-side copy wait time for many files overlaps instead of being
+#    paid one file at a time - this is what makes large backups fast. An
+#    overall status bar shows % complete, files pending, elapsed and ETA.
+#    Folder lookups are cached per user/sub-folder so repeat files in the
+#    same folder don't re-walk the destination tree. ──────────────────────────
 $userFolderCache = @{}
 $subFolderCache  = @{}
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $done = 0; $ok = 0; $skip = 0; $fail = 0
 $perUserOk = @{}; $perUserSkip = @{}; $perUserFail = @{}
 
-foreach ($item in $work) {
-    $done++
+function Write-BackupProgress {
+    param([string]$CurrentLabel = "")
     $pending = $totalWork - $done
     $pct = if ($totalWork -gt 0) { [Math]::Round(($done / $totalWork) * 100, 1) } else { 100 }
     $avgPerItemSec = if ($done -gt 0) { $sw.Elapsed.TotalSeconds / $done } else { 0 }
     $etaStr = if ($done -lt 3) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds([Math]::Max(0, $avgPerItemSec * $pending))) }
     $status = "$done/$totalWork done ($pct%) | Pending: $pending | Elapsed: $(Format-Duration $sw.Elapsed) | ETA: $etaStr"
-    Write-Progress -Id 2 -Activity "OneDrive Backup" -Status $status -PercentComplete $pct -CurrentOperation "$($item.UserPrincipalName): $($item.FileName)"
-    if ($done % 25 -eq 0 -or $done -eq $totalWork) {
-        Write-Log "Progress: $status"
+    Write-Progress -Id 2 -Activity "OneDrive Backup" -Status $status -PercentComplete $pct -CurrentOperation $CurrentLabel
+    if ($done % 25 -eq 0 -or $done -eq $totalWork) { Write-Log "Progress: $status" }
+}
+
+function Add-BackupResult {
+    param($Item, [string]$Status, [string]$Detail)
+    $upn = $Item.UserPrincipalName
+    $done++
+    switch ($Status) {
+        "Success" { $ok++;   $perUserOk[$upn]   = ($perUserOk[$upn] + 1) }
+        "Skipped" { $skip++; $perUserSkip[$upn] = ($perUserSkip[$upn] + 1) }
+        "Failed"  { $fail++; $perUserFail[$upn] = ($perUserFail[$upn] + 1) }
     }
+    $results.Add([PSCustomObject]@{
+        UserPrincipalName = $upn; FolderName = $Item.FolderName
+        File = $Item.FileName; RelativeFolder = $Item.RelativeFolder
+        Status = $Status; Detail = $Detail
+    })
+    Write-BackupProgress -CurrentLabel "$upn`: $($Item.FileName)"
+}
 
-    $upn = $item.UserPrincipalName
+for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
+    $batchEnd = [Math]::Min($batchStart + $BatchSize - 1, $totalWork - 1)
+    $inFlight = New-Object System.Collections.Generic.List[object]
 
-    if (-not $Apply) {
-        $results.Add([PSCustomObject]@{
-            UserPrincipalName = $upn; FolderName = $item.FolderName
-            File = $item.FileName; RelativeFolder = $item.RelativeFolder
-            Status = "WhatIf"; Detail = "Would copy to $DestinationLibrary/$($item.FolderName)/$($item.RelativeFolder)"
-        })
-        continue
-    }
+    # ── Dispatch phase: fire off every copy job in this batch ────────────────
+    for ($bi = $batchStart; $bi -le $batchEnd; $bi++) {
+        $item = $work[$bi]
+        $upn  = $item.UserPrincipalName
 
-    try {
-        if (-not $userFolderCache.ContainsKey($item.FolderName)) {
-            $userFolderCache[$item.FolderName] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName)
+        if (-not $Apply) {
+            Add-BackupResult -Item $item -Status "WhatIf" -Detail "Would copy to $DestinationLibrary/$($item.FolderName)/$($item.RelativeFolder)"
+            continue
         }
-        $targetFolderId = $userFolderCache[$item.FolderName]
-        if ($item.RelativeFolder) {
-            $subKey = "$($item.FolderName)|$($item.RelativeFolder)"
-            if (-not $subFolderCache.ContainsKey($subKey)) {
-                $subFolderCache[$subKey] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName + ($item.RelativeFolder -split '/' | Where-Object { $_ }))
+
+        try {
+            if (-not $userFolderCache.ContainsKey($item.FolderName)) {
+                $userFolderCache[$item.FolderName] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName)
             }
-            $targetFolderId = $subFolderCache[$subKey]
+            $targetFolderId = $userFolderCache[$item.FolderName]
+            if ($item.RelativeFolder) {
+                $subKey = "$($item.FolderName)|$($item.RelativeFolder)"
+                if (-not $subFolderCache.ContainsKey($subKey)) {
+                    $subFolderCache[$subKey] = Resolve-DriveFolder -DriveId $destDriveId -PathSegments ($baseSegments + $item.FolderName + ($item.RelativeFolder -split '/' | Where-Object { $_ }))
+                }
+                $targetFolderId = $subFolderCache[$subKey]
+            }
+        } catch {
+            Add-BackupResult -Item $item -Status "Failed" -Detail "CreateFolder: $($_.Exception.Message)"
+            continue
         }
-    } catch {
-        $fail++; $perUserFail[$upn] = ($perUserFail[$upn] + 1)
-        $results.Add([PSCustomObject]@{
-            UserPrincipalName = $upn; FolderName = $item.FolderName
-            File = $item.FileName; RelativeFolder = $item.RelativeFolder
-            Status = "Failed"; Detail = "CreateFolder: $($_.Exception.Message)"
-        })
-        continue
+
+        try {
+            $monitorUrl = Start-DriveItemCopy -SourceDriveId $item.SourceDriveId -ItemId $item.FileId -DestDriveId $destDriveId -DestFolderId $targetFolderId -Name $item.FileName
+            if (-not $monitorUrl) {
+                Add-BackupResult -Item $item -Status "Success" -Detail ""
+            } else {
+                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; Started = [Diagnostics.Stopwatch]::StartNew() })
+            }
+        } catch {
+            $msg = $_.Exception.Message
+            if ($msg -like "*nameAlreadyExists*") {
+                Add-BackupResult -Item $item -Status "Skipped" -Detail "Already exists at destination"
+            } else {
+                Write-Log "[$upn] $($item.FileName): copy failed: $msg" "ERROR"
+                Add-BackupResult -Item $item -Status "Failed" -Detail $msg
+            }
+        }
+
+        if ($ThrottleMs -gt 0) { Start-Sleep -Milliseconds $ThrottleMs }
     }
 
-    try {
-        Copy-DriveItemAndWait -SourceDriveId $item.SourceDriveId -ItemId $item.FileId -DestDriveId $destDriveId -DestFolderId $targetFolderId -Name $item.FileName
-        $ok++; $perUserOk[$upn] = ($perUserOk[$upn] + 1)
-        $results.Add([PSCustomObject]@{
-            UserPrincipalName = $upn; FolderName = $item.FolderName
-            File = $item.FileName; RelativeFolder = $item.RelativeFolder
-            Status = "Success"; Detail = ""
-        })
-    } catch {
-        $msg = $_.Exception.Message
-        if ($msg -like "*nameAlreadyExists*") {
-            $skip++; $perUserSkip[$upn] = ($perUserSkip[$upn] + 1)
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $item.FolderName
-                File = $item.FileName; RelativeFolder = $item.RelativeFolder
-                Status = "Skipped"; Detail = "Already exists at destination"
-            })
-        } else {
-            $fail++; $perUserFail[$upn] = ($perUserFail[$upn] + 1)
-            Write-Log "[$upn] $($item.FileName): copy failed: $msg" "ERROR"
-            $results.Add([PSCustomObject]@{
-                UserPrincipalName = $upn; FolderName = $item.FolderName
-                File = $item.FileName; RelativeFolder = $item.RelativeFolder
-                Status = "Failed"; Detail = $msg
-            })
+    # ── Poll phase: wait for every in-flight copy job in this batch together,
+    #    so the wait time is shared across the whole batch, not per file. ────
+    while ($inFlight.Count -gt 0) {
+        Start-Sleep -Milliseconds 1000
+        $stillPending = New-Object System.Collections.Generic.List[object]
+        foreach ($entry in $inFlight) {
+            $item = $entry.Item
+            if ($entry.Started.Elapsed.TotalSeconds -ge $MonitorTimeoutSec) {
+                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy job timed out after $MonitorTimeoutSec sec" "ERROR"
+                Add-BackupResult -Item $item -Status "Failed" -Detail "Copy job timed out after $MonitorTimeoutSec sec"
+                continue
+            }
+            $status = $null
+            try { $status = Get-CopyJobStatus -MonitorUrl $entry.MonitorUrl }
+            catch { $stillPending.Add($entry); continue }
+            if ($status.status -eq "completed") {
+                Add-BackupResult -Item $item -Status "Success" -Detail ""
+            } elseif ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
+                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) $($status.statusDescription)" "ERROR"
+                Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $($status.statusDescription)"
+            } else {
+                $stillPending.Add($entry)
+            }
         }
+        $inFlight = $stillPending
     }
-    Start-Sleep -Milliseconds $ThrottleMs
 }
 Write-Progress -Id 2 -Activity "OneDrive Backup" -Completed
 
