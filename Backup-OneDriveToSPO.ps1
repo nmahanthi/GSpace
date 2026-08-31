@@ -21,6 +21,13 @@
     status bar with % complete, files pending, elapsed time and an ETA
     (also logged to the console every 25 files).
 
+    KEEP-ALIVE / LONG RUNS
+    Every Graph call is bounded by a hard per-call timeout and run through a
+    retry-with-backoff wrapper, and the Graph connection is proactively
+    refreshed every -TokenRefreshIntervalMin minutes - so a multi-hour backup
+    survives network blips, VPN reconnects, laptop sleep/wake, or a silently
+    dropped idle connection instead of hanging forever on one stuck call.
+
     AUTHENTICATION
     Reading another user's OneDrive (/users/{id}/drive) is blocked under
     delegated auth (403 Forbidden), even for a signed-in Global
@@ -79,6 +86,23 @@
     (Connect-MgGraph -ClientTimeout). Raise this on slow/high-latency links.
     Default: 100 (the Microsoft.Graph.Authentication default).
 
+.PARAMETER RequestTimeoutSec
+    Hard cap, in seconds, on any single Graph HTTP call. On long-running
+    backups (hours), a network blip, sleep/wake or VPN reconnect can leave a
+    call hung forever with no error and no progress - this bounds every call
+    so the script always recovers (aborts the stuck call, reconnects, and
+    retries) instead of hanging indefinitely. Default: 120.
+
+.PARAMETER TokenRefreshIntervalMin
+    Proactively reconnect to Microsoft Graph (fresh token + fresh HTTP
+    connection) every N minutes of wall-clock time, independent of errors,
+    to keep the session alive across long runs. Default: 45.
+
+.PARAMETER MaxGraphRetries
+    Max attempts per Graph call before giving up on that call (with
+    exponential backoff between attempts, and a forced reconnect if the
+    failure looks auth/connection-related). Default: 5.
+
 .PARAMETER Apply
     Actually perform the copies. Without this switch, the script only
     reports what it would copy.
@@ -116,6 +140,9 @@ param(
     [int]$ThrottleMs         = 250,
     [int]$MonitorTimeoutSec  = 180,
     [int]$GraphClientTimeoutSec = 100,
+    [int]$RequestTimeoutSec = 120,
+    [int]$TokenRefreshIntervalMin = 45,
+    [int]$MaxGraphRetries = 5,
     [switch]$Apply,
     [string]$OutputCsv = (Join-Path $PSScriptRoot "OneDriveBackupReport_$(Get-Date -f 'yyyyMMdd_HHmmss').csv")
 )
@@ -139,6 +166,118 @@ function Assert-Module {
         throw "Required module '$Name' is not installed. Run: Install-Module $Name -Scope CurrentUser"
     }
     Import-Module $Name -ErrorAction Stop
+}
+
+# ── Keep-alive: bounded-time Graph calls on a disposable background runspace ──
+# On multi-hour runs a single Invoke-MgGraphRequest call can hang forever with
+# no error and no progress after a network blip, laptop sleep/wake, VPN
+# reconnect, or a silently-dropped idle TCP connection. Every Graph call is
+# routed through a background runspace with a hard wall-clock timeout; if it
+# doesn't return in time we abort it, throw the stuck runspace away, and let
+# the retry loop reconnect and try again - so the script always keeps moving
+# instead of hanging.
+$script:LastConnectTime = $null
+$script:GraphRunspace   = $null
+
+function New-GraphRunspace {
+    if ($script:GraphRunspace) {
+        try { $script:GraphRunspace.Close() } catch {}
+        try { $script:GraphRunspace.Dispose() } catch {}
+    }
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $init = [PowerShell]::Create()
+    $init.Runspace = $rs
+    [void]$init.AddScript('Import-Module Microsoft.Graph.Authentication -ErrorAction Stop')
+    $init.Invoke() | Out-Null
+    $init.Dispose()
+    $script:GraphRunspace = $rs
+}
+
+function Invoke-WithHardTimeout {
+    param([scriptblock]$ScriptBlock, [hashtable]$Params, [int]$TimeoutSec)
+    if (-not $script:GraphRunspace -or $script:GraphRunspace.RunspaceStateInfo.State -ne 'Opened') {
+        New-GraphRunspace
+    }
+    $ps = [PowerShell]::Create()
+    $ps.Runspace = $script:GraphRunspace
+    [void]$ps.AddScript($ScriptBlock).AddParameters($Params)
+    $async = $ps.BeginInvoke()
+    if (-not $async.AsyncWaitHandle.WaitOne([TimeSpan]::FromSeconds($TimeoutSec))) {
+        try { $ps.Stop() } catch {}
+        $ps.Dispose()
+        New-GraphRunspace   # the old runspace may be wedged - discard it, start clean
+        throw "Timed out after $TimeoutSec sec waiting for a response."
+    }
+    try {
+        $out = $ps.EndInvoke($async)
+        if ($ps.HadErrors -and $ps.Streams.Error.Count -gt 0) { throw $ps.Streams.Error[0].Exception }
+        return $out
+    } finally {
+        $ps.Dispose()
+    }
+}
+
+# Runs a Graph call with: proactive token/connection refresh, a hard per-call
+# timeout, and retry-with-backoff (reconnecting first if the failure looks
+# auth/connection-related). Returns @{ Result = ...; Headers = ... }.
+function Invoke-GraphRequestSafe {
+    param(
+        [string]$Method = "GET",
+        [string]$Uri,
+        [string]$Body = $null,
+        [string]$ContentType = "application/json",
+        [switch]$NeedHeaders
+    )
+    if (-not $script:LastConnectTime -or ((Get-Date) - $script:LastConnectTime).TotalMinutes -ge $TokenRefreshIntervalMin) {
+        Write-Log "Keep-alive: refreshing Graph connection (every $TokenRefreshIntervalMin min) ..."
+        Connect-GraphAppOnly
+    }
+
+    $scriptBlock = {
+        param($Method, $Uri, $Body, $ContentType, $NeedHeaders)
+        $rh = $null
+        if ($NeedHeaders) {
+            $r = Invoke-MgGraphRequest -Method $Method -Uri $Uri -Body $Body -ContentType $ContentType -ResponseHeadersVariable rh -ErrorAction Stop
+        } else {
+            $r = Invoke-MgGraphRequest -Method $Method -Uri $Uri -Body $Body -ContentType $ContentType -ErrorAction Stop
+        }
+        [PSCustomObject]@{ Result = $r; Headers = $rh }
+    }
+    $params = @{ Method = $Method; Uri = $Uri; Body = $Body; ContentType = $ContentType; NeedHeaders = [bool]$NeedHeaders }
+
+    $attempt = 0
+    $delay = 2
+    while ($true) {
+        $attempt++
+        try {
+            $out = Invoke-WithHardTimeout -ScriptBlock $scriptBlock -Params $params -TimeoutSec $RequestTimeoutSec
+            return $out[0]
+        } catch {
+            if ($attempt -ge $MaxGraphRetries) { throw }
+            $msg = $_.Exception.Message
+            Write-Log "Graph call attempt $attempt/$MaxGraphRetries failed ($Method $Uri): $msg. Retrying in $delay sec ..." "WARN"
+            if ($msg -match "Timed out|Unauthorized|401|expired|token|Could not establish|SSL|connection") {
+                try { Connect-GraphAppOnly } catch { Write-Log "Reconnect attempt failed: $($_.Exception.Message)" "WARN" }
+            }
+            Start-Sleep -Seconds $delay
+            $delay = [Math]::Min($delay * 2, 60)
+        }
+    }
+}
+
+# Polls a copy-job monitor URL with the same hard-timeout protection. The
+# monitor URL is short-lived/unauthenticated per Microsoft's docs, but some
+# tenants require the bearer token anyway - falls back to Invoke-MgGraphRequest.
+function Get-CopyJobStatus {
+    param([string]$MonitorUrl)
+    $scriptBlock = {
+        param($MonitorUrl)
+        try { Invoke-RestMethod -Uri $MonitorUrl -Method GET -ErrorAction Stop }
+        catch { Invoke-MgGraphRequest -Method GET -Uri $MonitorUrl -ErrorAction Stop }
+    }
+    $out = Invoke-WithHardTimeout -ScriptBlock $scriptBlock -Params @{ MonitorUrl = $MonitorUrl } -TimeoutSec ([Math]::Min(30, $RequestTimeoutSec))
+    return $out[0]
 }
 
 # ── Graph app-only connection ────────────────────────────────────────────────
@@ -177,6 +316,7 @@ Common causes for 'ClientSecretCredential authentication failed':
         }
         throw
     }
+    $script:LastConnectTime = Get-Date
     Write-Log "Connected." "SUCCESS"
 }
 
@@ -219,8 +359,8 @@ function Get-DestinationDriveId {
     $uri = [Uri]$DestinationSiteUrl
     $hostName = $uri.Host
     $sitePath = $uri.AbsolutePath.Trim('/')
-    $site = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/sites/${hostName}:/${sitePath}" -ErrorAction Stop
-    $drivesResp = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/sites/$($site.id)/drives" -ErrorAction Stop
+    $site = (Invoke-GraphRequestSafe -Method GET -Uri "/v1.0/sites/${hostName}:/${sitePath}").Result
+    $drivesResp = (Invoke-GraphRequestSafe -Method GET -Uri "/v1.0/sites/$($site.id)/drives").Result
     $drive = $drivesResp.value | Where-Object { $_.name -eq $DestinationLibrary }
     if (-not $drive) {
         $available = ($drivesResp.value | ForEach-Object { $_.name }) -join ', '
@@ -238,7 +378,7 @@ function Resolve-DriveFolder {
         $existingId = $null
         $childrenUri = "/v1.0/drives/$DriveId/items/$parentId/children?`$top=500&`$select=id,name,folder"
         while ($childrenUri) {
-            $page = Invoke-MgGraphRequest -Method GET -Uri $childrenUri -ErrorAction Stop
+            $page = (Invoke-GraphRequestSafe -Method GET -Uri $childrenUri).Result
             $match = $page.value | Where-Object { $_.folder -and $_.name -eq $seg } | Select-Object -First 1
             if ($match) { $existingId = $match.id; break }
             $childrenUri = $page.'@odata.nextLink'
@@ -248,11 +388,11 @@ function Resolve-DriveFolder {
         } else {
             $body = @{ name = $seg; folder = @{}; "@microsoft.graph.conflictBehavior" = "fail" } | ConvertTo-Json
             try {
-                $created = Invoke-MgGraphRequest -Method POST -Uri "/v1.0/drives/$DriveId/items/$parentId/children" -Body $body -ContentType "application/json" -ErrorAction Stop
+                $created = (Invoke-GraphRequestSafe -Method POST -Uri "/v1.0/drives/$DriveId/items/$parentId/children" -Body $body -ContentType "application/json").Result
                 $parentId = $created.id
             } catch {
                 # Race: created by a concurrent run between our check and create - re-fetch it.
-                $page = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/drives/$DriveId/items/$parentId/children?`$top=500&`$select=id,name,folder" -ErrorAction Stop
+                $page = (Invoke-GraphRequestSafe -Method GET -Uri "/v1.0/drives/$DriveId/items/$parentId/children?`$top=500&`$select=id,name,folder").Result
                 $match = $page.value | Where-Object { $_.folder -and $_.name -eq $seg } | Select-Object -First 1
                 if (-not $match) { throw }
                 $parentId = $match.id
@@ -269,7 +409,7 @@ function Get-DriveFilesRecursive {
     $uri = "/v1.0/drives/$DriveId/items/$ItemId/children?`$top=200"
     while ($uri) {
         if ($MaxItemsPerUser -gt 0 -and $Count.Value -ge $MaxItemsPerUser) { break }
-        $page = Invoke-MgGraphRequest -Method GET -Uri $uri -ErrorAction Stop
+        $page = (Invoke-GraphRequestSafe -Method GET -Uri $uri).Result
         foreach ($item in $page.value) {
             if ($MaxItemsPerUser -gt 0 -and $Count.Value -ge $MaxItemsPerUser) { break }
             if ($item.folder) {
@@ -290,19 +430,18 @@ function Copy-DriveItemAndWait {
     param([string]$SourceDriveId, [string]$ItemId, [string]$DestDriveId, [string]$DestFolderId, [string]$Name)
 
     $body = @{ parentReference = @{ driveId = $DestDriveId; id = $DestFolderId }; name = $Name } | ConvertTo-Json
-    $headers = $null
-    Invoke-MgGraphRequest -Method POST -Uri "/v1.0/drives/$SourceDriveId/items/$ItemId/copy" `
-        -Body $body -ContentType "application/json" -ResponseHeadersVariable headers -ErrorAction Stop | Out-Null
+    $resp = Invoke-GraphRequestSafe -Method POST -Uri "/v1.0/drives/$SourceDriveId/items/$ItemId/copy" `
+        -Body $body -ContentType "application/json" -NeedHeaders
 
-    $location = $headers.Location
+    $location = $resp.Headers.Location
     if ($location -is [array]) { $location = $location[0] }
     if (-not $location) { return }  # Some tenants complete the copy synchronously with no monitor URL.
 
     $sw = [Diagnostics.Stopwatch]::StartNew()
     while ($sw.Elapsed.TotalSeconds -lt $MonitorTimeoutSec) {
         $status = $null
-        try { $status = Invoke-RestMethod -Uri $location -Method GET -ErrorAction Stop }
-        catch { $status = Invoke-MgGraphRequest -Method GET -Uri $location -ErrorAction Stop }
+        try { $status = Get-CopyJobStatus -MonitorUrl $location }
+        catch { Start-Sleep -Milliseconds 1000; continue }
         if ($status.status -eq "completed") { return }
         if ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
             throw "Copy job status '$($status.status)': $($status.statusDescription)"
@@ -348,7 +487,7 @@ foreach ($target in $targets) {
     Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Status "$upn ($u of $($targets.Count))" -PercentComplete (($u / [Math]::Max($targets.Count, 1)) * 100)
 
     try {
-        $drive = Invoke-MgGraphRequest -Method GET -Uri "/v1.0/users/$upn/drive" -ErrorAction Stop
+        $drive = (Invoke-GraphRequestSafe -Method GET -Uri "/v1.0/users/$upn/drive").Result
     } catch {
         Write-Log "[$upn] No OneDrive found, skipped: $($_.Exception.Message)" "WARN"
         $results.Add([PSCustomObject]@{
