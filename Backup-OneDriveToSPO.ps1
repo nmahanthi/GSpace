@@ -298,6 +298,23 @@ function Get-CopyJobStatus {
     return $out[0]
 }
 
+# Fallback completion check used when the copy-job monitor URL itself can't
+# be reached (some tenants return a Location header on the tenant's own
+# *-my.sharepoint.com/*.sharepoint.com host, which many corporate networks
+# don't allow/resolve even though graph.microsoft.com works fine). Checks
+# directly via Graph whether the file now exists at the destination.
+function Test-DriveItemExistsByName {
+    param([string]$DriveId, [string]$ParentId, [string]$Name)
+    $encoded = [Uri]::EscapeDataString($Name)
+    try {
+        (Invoke-GraphRequestSafe -Method GET -Uri "/v1.0/drives/$DriveId/items/${ParentId}:/$encoded") | Out-Null
+        return $true
+    } catch {
+        if ($_.Exception.Message -match "itemNotFound|404|NotFound|Not Found") { return $false }
+        throw
+    }
+}
+
 # ── Graph app-only connection ────────────────────────────────────────────────
 function Connect-GraphAppOnly {
     Assert-Module "Microsoft.Graph.Authentication"
@@ -611,7 +628,7 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
             if (-not $monitorUrl) {
                 Add-BackupResult -Item $item -Status "Success" -Detail ""
             } else {
-                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; Started = [Diagnostics.Stopwatch]::StartNew(); LastLogSec = 0; PollErrors = 0 })
+                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; DestDriveId = $destDriveId; DestFolderId = $targetFolderId; Started = [Diagnostics.Stopwatch]::StartNew(); LastLogSec = 0; PollErrors = 0; UseExistenceCheck = $false })
             }
         } catch {
             $msg = $_.Exception.Message
@@ -638,6 +655,26 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
                 Add-BackupResult -Item $item -Status "Failed" -Detail "Copy job timed out after $MonitorTimeoutSec sec"
                 continue
             }
+            if ($entry.UseExistenceCheck) {
+                # Monitor URL host is unreachable from this network - fall back to
+                # asking Graph directly whether the file now exists at the
+                # destination (same graph.microsoft.com endpoint as everything else).
+                try {
+                    if (Test-DriveItemExistsByName -DriveId $entry.DestDriveId -ParentId $entry.DestFolderId -Name $item.FileName) {
+                        Add-BackupResult -Item $item -Status "Success" -Detail ""
+                    } else {
+                        $stillPending.Add($entry)
+                    }
+                } catch {
+                    $entry.PollErrors++
+                    if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
+                        Write-Log "[$($item.UserPrincipalName)] $($item.FileName): existence check failed: $($_.Exception.Message)" "WARN"
+                    }
+                    $stillPending.Add($entry)
+                }
+                continue
+            }
+
             $status = $null
             try { $status = Get-CopyJobStatus -MonitorUrl $entry.MonitorUrl }
             catch {
@@ -649,6 +686,14 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
                 # between a slow copy and a broken monitor URL/permission issue.
                 if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
                     Write-Log "[$($item.UserPrincipalName)] $($item.FileName): poll attempt $($entry.PollErrors) failed: $($_.Exception.Message)" "WARN"
+                }
+                # A handful of failures in a row on the SAME host almost always
+                # means the monitor URL's host is unreachable from this network
+                # (DNS/firewall), not a transient blip - switch to the existence
+                # check instead of retrying an endpoint that will never answer.
+                if ($entry.PollErrors -eq 3) {
+                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): monitor URL unreachable after 3 attempts, switching to destination existence check" "WARN"
+                    $entry.UseExistenceCheck = $true
                 }
                 $stillPending.Add($entry); continue
             }
