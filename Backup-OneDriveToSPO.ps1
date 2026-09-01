@@ -13,14 +13,17 @@
          folder, preserving the original sub-folder structure.
 
     Copying is done server-side via the Microsoft Graph driveItem "copy"
-    action (no file content passes through this machine). Copies are
-    pipelined in batches of -BatchSize: a batch's copy jobs are all fired
-    off first, then polled together, so the server-side wait time for many
-    files overlaps instead of being paid one file at a time.
+    action (no file content passes through this machine). Copies run in a
+    sliding window of up to -BatchSize concurrent jobs: as soon as any one
+    finishes, its slot is immediately refilled with the next queued file, so
+    the server-side wait time for many files overlaps instead of being paid
+    one file at a time, and a single large straggler file never blocks the
+    rest of the queue behind it.
 
     Runs in two phases: (1) discovers every file for every user first, so
-    the totals are known up front, then (2) copies them while showing a
-    status bar with % complete, files pending, elapsed time and an ETA
+    the totals (including total data size) are known up front, then (2)
+    copies them while showing a status bar with % complete, GB copied, files
+    pending, elapsed time and an ETA
     (also logged to the console every 25 files).
 
     KEEP-ALIVE / LONG RUNS
@@ -77,20 +80,29 @@
     Cap on the number of files copied per user; 0 = unlimited. Default: 0.
 
 .PARAMETER ThrottleMs
-    Delay between copy-job dispatches within a batch, to avoid throttling.
-    Default: 100ms.
+    Delay between copy-job dispatches, to avoid throttling. Since the actual
+    file transfer happens entirely server-side, this is the main cost of
+    dispatching each job - lower it (even to 0) for large/many-user backups
+    if you are not seeing 429 (throttling) errors in the log. Default: 100ms.
 
 .PARAMETER BatchSize
-    Number of copy jobs kept in flight at once (fired off together, then
-    polled together) - the main lever for speeding up large backups, since
-    it overlaps the server-side copy wait time across many files instead of
-    waiting for each one before starting the next. Raise it for faster runs
-    if you are not seeing 429 (throttling) errors; lower it if you are.
-    Default: 10.
+    Max number of copy jobs kept in flight at once, in a sliding window: as
+    soon as any one finishes, its slot is immediately refilled with the next
+    queued file, rather than waiting for a whole fixed batch to finish. This
+    is the main lever for speeding up large (multi-GB per user) backups,
+    since it overlaps the server-side copy wait time across many files
+    instead of paying it one file at a time, and a single large straggler no
+    longer blocks the rest of the queue behind it. The copy itself is a
+    lightweight async dispatch (no data flows through this machine), so this
+    can usually be raised well above the default for large backups (e.g.
+    50-100) - raise it if you are not seeing 429 (throttling) errors; lower
+    it if you are. Default: 10.
 
 .PARAMETER MonitorTimeoutSec
     Max seconds to wait for each server-side copy job to complete before
-    treating it as failed. Default: 180.
+    treating it as failed. Large files can genuinely take much longer than
+    small ones to copy server-side - raise this for users with multi-GB
+    files (e.g. 1800 for very large files). Default: 300.
 
 .PARAMETER GraphClientTimeoutSec
     Seconds to wait for the Graph/Azure AD token request before giving up
@@ -149,8 +161,8 @@ param(
     [System.Security.SecureString]$ClientSecret,
     [int]$MaxItemsPerUser    = 0,
     [int]$ThrottleMs         = 100,
-    [int]$BatchSize          = 10,
-    [int]$MonitorTimeoutSec  = 180,
+    [int]$BatchSize          = 20,
+    [int]$MonitorTimeoutSec  = 300,
     [int]$GraphClientTimeoutSec = 100,
     [int]$RequestTimeoutSec = 120,
     [int]$TokenRefreshIntervalMin = 45,
@@ -456,7 +468,7 @@ function Get-DriveFilesRecursive {
                 $sub = Get-DriveFilesRecursive -DriveId $DriveId -ItemId $item.id -RelativeFolder (Join-RelPath $RelativeFolder $item.name) -Count $Count
                 foreach ($s in $sub) { $results.Add($s) }
             } elseif ($item.file) {
-                $results.Add([PSCustomObject]@{ Id = $item.id; Name = $item.name; RelativeFolder = $RelativeFolder })
+                $results.Add([PSCustomObject]@{ Id = $item.id; Name = $item.name; RelativeFolder = $RelativeFolder; Size = [int64]$item.size })
                 $Count.Value++
             }
         }
@@ -486,6 +498,14 @@ function Format-Duration {
     param([TimeSpan]$Span)
     if ($Span.TotalDays -ge 1) { return $Span.ToString("d\.hh\:mm\:ss") }
     return $Span.ToString("hh\:mm\:ss")
+}
+
+# ── Format a byte count as GB/MB for human-readable progress on large backups ─
+function Format-Bytes {
+    param([long]$Bytes)
+    if ($Bytes -ge 1GB) { return "{0:N2} GB" -f ($Bytes / 1GB) }
+    if ($Bytes -ge 1MB) { return "{0:N1} MB" -f ($Bytes / 1MB) }
+    return "$Bytes B"
 }
 
 # =============================================================================
@@ -522,7 +542,7 @@ foreach ($target in $targets) {
         Write-Log "[$upn] No OneDrive found, skipped: $($_.Exception.Message)" "WARN"
         $results.Add([PSCustomObject]@{
             UserPrincipalName = $upn; FolderName = $target.FolderName
-            File = ""; RelativeFolder = ""; Status = "Skipped"; Detail = "No OneDrive: $($_.Exception.Message)"
+            File = ""; RelativeFolder = ""; Size = 0; Status = "Skipped"; Detail = "No OneDrive: $($_.Exception.Message)"
         })
         continue
     }
@@ -534,7 +554,7 @@ foreach ($target in $targets) {
         Write-Log "[$upn] Could not enumerate OneDrive files: $($_.Exception.Message)" "ERROR"
         $results.Add([PSCustomObject]@{
             UserPrincipalName = $upn; FolderName = $target.FolderName
-            File = ""; RelativeFolder = ""; Status = "Failed"; Detail = "Enumerate: $($_.Exception.Message)"
+            File = ""; RelativeFolder = ""; Size = 0; Status = "Failed"; Detail = "Enumerate: $($_.Exception.Message)"
         })
         continue
     }
@@ -542,35 +562,42 @@ foreach ($target in $targets) {
     foreach ($f in $files) {
         $work.Add([PSCustomObject]@{
             UserPrincipalName = $upn; FolderName = $target.FolderName; SourceDriveId = $drive.id
-            FileId = $f.Id; FileName = $f.Name; RelativeFolder = $f.RelativeFolder
+            FileId = $f.Id; FileName = $f.Name; RelativeFolder = $f.RelativeFolder; Size = $f.Size
         })
     }
 }
 Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Completed
 
-$totalWork = $work.Count
-Write-Log "Phase 1/2 complete: $totalWork file(s) to process across $($targets.Count) user(s)." "SUCCESS"
+$totalWork  = $work.Count
+$totalBytes = ($work | Measure-Object -Property Size -Sum).Sum
+if (-not $totalBytes) { $totalBytes = 0 }
+Write-Log "Phase 1/2 complete: $totalWork file(s), $(Format-Bytes $totalBytes) total, to process across $($targets.Count) user(s)." "SUCCESS"
 
-# ── Phase 2: copy (or report, in dry run) files in batches of -BatchSize.
-#    All copy jobs in a batch are fired off first, then polled together, so
-#    the server-side copy wait time for many files overlaps instead of being
-#    paid one file at a time - this is what makes large backups fast. An
-#    overall status bar shows % complete, files pending, elapsed and ETA.
+# ── Phase 2: copy (or report, in dry run) files using a sliding window of up
+#    to -BatchSize concurrent copy jobs. As soon as ANY job finishes, its slot
+#    is immediately refilled with the next queued file - unlike a fixed batch
+#    (fire N, wait for ALL N, then fire the next N), a single large straggler
+#    file no longer blocks dispatch of the rest of the queue behind it. This
+#    is the main lever for large (multi-GB/user) backups. An overall status
+#    bar shows % complete, GB copied, files pending, elapsed and ETA (by
+#    bytes, not just file count, since a few huge files can dominate the
+#    total far more than the item count suggests).
 #    Folder lookups are cached per user/sub-folder so repeat files in the
 #    same folder don't re-walk the destination tree. ──────────────────────────
 $userFolderCache = @{}
 $subFolderCache  = @{}
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$done = 0; $ok = 0; $skip = 0; $fail = 0
+$done = 0; $ok = 0; $skip = 0; $fail = 0; $doneBytes = 0
 $perUserOk = @{}; $perUserSkip = @{}; $perUserFail = @{}
 
 function Write-BackupProgress {
     param([string]$CurrentLabel = "")
     $pending = $totalWork - $done
+    $pendingBytes = [Math]::Max(0, $totalBytes - $doneBytes)
     $pct = if ($totalWork -gt 0) { [Math]::Round(($done / $totalWork) * 100, 1) } else { 100 }
-    $avgPerItemSec = if ($done -gt 0) { $sw.Elapsed.TotalSeconds / $done } else { 0 }
-    $etaStr = if ($done -lt 3) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds([Math]::Max(0, $avgPerItemSec * $pending))) }
-    $status = "$done/$totalWork done ($pct%) | Pending: $pending | Elapsed: $(Format-Duration $sw.Elapsed) | ETA: $etaStr"
+    $avgBytesPerSec = if ($doneBytes -gt 0) { $doneBytes / $sw.Elapsed.TotalSeconds } else { 0 }
+    $etaStr = if ($done -lt 3 -or $avgBytesPerSec -le 0) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds([Math]::Max(0, $pendingBytes / $avgBytesPerSec))) }
+    $status = "$done/$totalWork done ($pct%) | $(Format-Bytes $doneBytes)/$(Format-Bytes $totalBytes) | Pending: $pending | Elapsed: $(Format-Duration $sw.Elapsed) | ETA: $etaStr"
     Write-Progress -Id 2 -Activity "OneDrive Backup" -Status $status -PercentComplete $pct -CurrentOperation $CurrentLabel
     if ($done % 25 -eq 0 -or $done -eq $totalWork) { Write-Log "Progress: $status" }
 }
@@ -579,6 +606,7 @@ function Add-BackupResult {
     param($Item, [string]$Status, [string]$Detail)
     $upn = $Item.UserPrincipalName
     $done++
+    if ($Status -in @("Success", "Skipped")) { $doneBytes += $Item.Size }
     switch ($Status) {
         "Success" { $ok++;   $perUserOk[$upn]   = ($perUserOk[$upn] + 1) }
         "Skipped" { $skip++; $perUserSkip[$upn] = ($perUserSkip[$upn] + 1) }
@@ -586,19 +614,23 @@ function Add-BackupResult {
     }
     $results.Add([PSCustomObject]@{
         UserPrincipalName = $upn; FolderName = $Item.FolderName
-        File = $Item.FileName; RelativeFolder = $Item.RelativeFolder
+        File = $Item.FileName; RelativeFolder = $Item.RelativeFolder; Size = $Item.Size
         Status = $Status; Detail = $Detail
     })
     Write-BackupProgress -CurrentLabel "$upn`: $($Item.FileName)"
 }
 
-for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
-    $batchEnd = [Math]::Min($batchStart + $BatchSize - 1, $totalWork - 1)
-    $inFlight = New-Object System.Collections.Generic.List[object]
+$nextIndex = 0
+$inFlight  = New-Object System.Collections.Generic.List[object]
 
-    # ── Dispatch phase: fire off every copy job in this batch ────────────────
-    for ($bi = $batchStart; $bi -le $batchEnd; $bi++) {
-        $item = $work[$bi]
+# Sliding window: keep dispatching new copy jobs as long as there is room in
+# the window and work left, then poll everything currently in flight. Any
+# entry that finishes frees its slot immediately on the next iteration -
+# jobs are never held up waiting for the rest of a fixed batch to finish.
+while ($nextIndex -lt $totalWork -or $inFlight.Count -gt 0) {
+    while ($inFlight.Count -lt $BatchSize -and $nextIndex -lt $totalWork) {
+        $item = $work[$nextIndex]
+        $nextIndex++
         $upn  = $item.UserPrincipalName
 
         if (-not $Apply) {
@@ -643,76 +675,76 @@ for ($batchStart = 0; $batchStart -lt $totalWork; $batchStart += $BatchSize) {
         if ($ThrottleMs -gt 0) { Start-Sleep -Milliseconds $ThrottleMs }
     }
 
-    # ── Poll phase: wait for every in-flight copy job in this batch together,
-    #    so the wait time is shared across the whole batch, not per file. ────
-    while ($inFlight.Count -gt 0) {
-        Start-Sleep -Milliseconds 1000
-        $stillPending = New-Object System.Collections.Generic.List[object]
-        foreach ($entry in $inFlight) {
-            $item = $entry.Item
-            if ($entry.Started.Elapsed.TotalSeconds -ge $MonitorTimeoutSec) {
-                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy job timed out after $MonitorTimeoutSec sec" "ERROR"
-                Add-BackupResult -Item $item -Status "Failed" -Detail "Copy job timed out after $MonitorTimeoutSec sec"
-                continue
-            }
-            if ($entry.UseExistenceCheck) {
-                # Monitor URL host is unreachable from this network - fall back to
-                # asking Graph directly whether the file now exists at the
-                # destination (same graph.microsoft.com endpoint as everything else).
-                try {
-                    if (Test-DriveItemExistsByName -DriveId $entry.DestDriveId -ParentId $entry.DestFolderId -Name $item.FileName) {
-                        Add-BackupResult -Item $item -Status "Success" -Detail ""
-                    } else {
-                        $stillPending.Add($entry)
-                    }
-                } catch {
-                    $entry.PollErrors++
-                    if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
-                        Write-Log "[$($item.UserPrincipalName)] $($item.FileName): existence check failed: $($_.Exception.Message)" "WARN"
-                    }
+    if ($inFlight.Count -eq 0) { continue }
+
+    # ── Poll phase: check every in-flight copy job together, so the wait is
+    #    shared across the whole window instead of paid one file at a time. ──
+    Start-Sleep -Milliseconds 1000
+    $stillPending = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in $inFlight) {
+        $item = $entry.Item
+        if ($entry.Started.Elapsed.TotalSeconds -ge $MonitorTimeoutSec) {
+            Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy job timed out after $MonitorTimeoutSec sec" "ERROR"
+            Add-BackupResult -Item $item -Status "Failed" -Detail "Copy job timed out after $MonitorTimeoutSec sec"
+            continue
+        }
+        if ($entry.UseExistenceCheck) {
+            # Monitor URL host is unreachable from this network - fall back to
+            # asking Graph directly whether the file now exists at the
+            # destination (same graph.microsoft.com endpoint as everything else).
+            try {
+                if (Test-DriveItemExistsByName -DriveId $entry.DestDriveId -ParentId $entry.DestFolderId -Name $item.FileName) {
+                    Add-BackupResult -Item $item -Status "Success" -Detail ""
+                } else {
                     $stillPending.Add($entry)
                 }
-                continue
-            }
-
-            $status = $null
-            try { $status = Get-CopyJobStatus -MonitorUrl $entry.MonitorUrl }
-            catch {
+            } catch {
                 $entry.PollErrors++
-                # Log the actual error periodically instead of silently retrying
-                # forever - a copy that only ever fails to POLL (vs. one that is
-                # genuinely still running on Graph's side) looks identical in the
-                # final "timed out" message otherwise, and this is the difference
-                # between a slow copy and a broken monitor URL/permission issue.
                 if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
-                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): poll attempt $($entry.PollErrors) failed: $($_.Exception.Message)" "WARN"
-                }
-                # A handful of failures in a row on the SAME host almost always
-                # means the monitor URL's host is unreachable from this network
-                # (DNS/firewall), not a transient blip - switch to the existence
-                # check instead of retrying an endpoint that will never answer.
-                if ($entry.PollErrors -eq 3) {
-                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): monitor URL unreachable after 3 attempts, switching to destination existence check" "WARN"
-                    $entry.UseExistenceCheck = $true
-                }
-                $stillPending.Add($entry); continue
-            }
-            if ($status.status -eq "completed") {
-                Add-BackupResult -Item $item -Status "Success" -Detail ""
-            } elseif ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
-                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) $($status.statusDescription)" "ERROR"
-                Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $($status.statusDescription)"
-            } else {
-                $elapsedSec = [int]$entry.Started.Elapsed.TotalSeconds
-                if ($elapsedSec -ge $entry.LastLogSec + 30) {
-                    $entry.LastLogSec = $elapsedSec
-                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy still in progress after ${elapsedSec}s (status: $($status.status), $($status.percentageComplete)% complete)" "INFO"
+                    Write-Log "[$($item.UserPrincipalName)] $($item.FileName): existence check failed: $($_.Exception.Message)" "WARN"
                 }
                 $stillPending.Add($entry)
             }
+            continue
         }
-        $inFlight = $stillPending
+
+        $status = $null
+        try { $status = Get-CopyJobStatus -MonitorUrl $entry.MonitorUrl }
+        catch {
+            $entry.PollErrors++
+            # Log the actual error periodically instead of silently retrying
+            # forever - a copy that only ever fails to POLL (vs. one that is
+            # genuinely still running on Graph's side) looks identical in the
+            # final "timed out" message otherwise, and this is the difference
+            # between a slow copy and a broken monitor URL/permission issue.
+            if ($entry.PollErrors -eq 1 -or $entry.PollErrors % 10 -eq 0) {
+                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): poll attempt $($entry.PollErrors) failed: $($_.Exception.Message)" "WARN"
+            }
+            # A handful of failures in a row on the SAME host almost always
+            # means the monitor URL's host is unreachable from this network
+            # (DNS/firewall), not a transient blip - switch to the existence
+            # check instead of retrying an endpoint that will never answer.
+            if ($entry.PollErrors -eq 3) {
+                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): monitor URL unreachable after 3 attempts, switching to destination existence check" "WARN"
+                $entry.UseExistenceCheck = $true
+            }
+            $stillPending.Add($entry); continue
+        }
+        if ($status.status -eq "completed") {
+            Add-BackupResult -Item $item -Status "Success" -Detail ""
+        } elseif ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
+            Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) $($status.statusDescription)" "ERROR"
+            Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $($status.statusDescription)"
+        } else {
+            $elapsedSec = [int]$entry.Started.Elapsed.TotalSeconds
+            if ($elapsedSec -ge $entry.LastLogSec + 30) {
+                $entry.LastLogSec = $elapsedSec
+                Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy still in progress after ${elapsedSec}s (status: $($status.status), $($status.percentageComplete)% complete)" "INFO"
+            }
+            $stillPending.Add($entry)
+        }
     }
+    $inFlight = $stillPending
 }
 Write-Progress -Id 2 -Activity "OneDrive Backup" -Completed
 
