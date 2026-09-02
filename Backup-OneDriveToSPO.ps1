@@ -569,7 +569,11 @@ foreach ($target in $targets) {
 Write-Progress -Id 1 -Activity "Discovering OneDrive content" -Completed
 
 $totalWork  = $work.Count
-$totalBytes = ($work | Measure-Object -Property Size -Sum).Sum
+# Cast explicitly to [int64]: Measure-Object's -Sum is a [double], and mixing
+# a [double] with an [int32] literal (e.g. in [Math]::Max(0, $totalBytes))
+# makes PowerShell pick the Int32,Int32 overload and throw "value was either
+# too large or too small for an Int32" once totals exceed ~2GB.
+[int64]$totalBytes = ($work | Measure-Object -Property Size -Sum).Sum
 if (-not $totalBytes) { $totalBytes = 0 }
 Write-Log "Phase 1/2 complete: $totalWork file(s), $(Format-Bytes $totalBytes) total, to process across $($targets.Count) user(s)." "SUCCESS"
 
@@ -587,16 +591,18 @@ Write-Log "Phase 1/2 complete: $totalWork file(s), $(Format-Bytes $totalBytes) t
 $userFolderCache = @{}
 $subFolderCache  = @{}
 $sw = [Diagnostics.Stopwatch]::StartNew()
-$done = 0; $ok = 0; $skip = 0; $fail = 0; $doneBytes = 0
+$done = 0; $ok = 0; $skip = 0; $fail = 0; [int64]$doneBytes = 0
 $perUserOk = @{}; $perUserSkip = @{}; $perUserFail = @{}
 
 function Write-BackupProgress {
     param([string]$CurrentLabel = "")
     $pending = $totalWork - $done
-    $pendingBytes = [Math]::Max(0, $totalBytes - $doneBytes)
+    $pendingBytes = $totalBytes - $doneBytes
+    if ($pendingBytes -lt 0) { $pendingBytes = 0 }
     $pct = if ($totalWork -gt 0) { [Math]::Round(($done / $totalWork) * 100, 1) } else { 100 }
     $avgBytesPerSec = if ($doneBytes -gt 0) { $doneBytes / $sw.Elapsed.TotalSeconds } else { 0 }
-    $etaStr = if ($done -lt 3 -or $avgBytesPerSec -le 0) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds([Math]::Max(0, $pendingBytes / $avgBytesPerSec))) }
+    $etaSec = if ($done -lt 3 -or $avgBytesPerSec -le 0) { -1 } else { $pendingBytes / $avgBytesPerSec }
+    $etaStr = if ($etaSec -lt 0) { "calculating..." } else { Format-Duration ([TimeSpan]::FromSeconds($etaSec)) }
     $status = "$done/$totalWork done ($pct%) | $(Format-Bytes $doneBytes)/$(Format-Bytes $totalBytes) | Pending: $pending | Elapsed: $(Format-Duration $sw.Elapsed) | ETA: $etaStr"
     Write-Progress -Id 2 -Activity "OneDrive Backup" -Status $status -PercentComplete $pct -CurrentOperation $CurrentLabel
     if ($done % 25 -eq 0 -or $done -eq $totalWork) { Write-Log "Progress: $status" }
