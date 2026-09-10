@@ -633,8 +633,25 @@ $inFlight  = New-Object System.Collections.Generic.List[object]
 # the window and work left, then poll everything currently in flight. Any
 # entry that finishes frees its slot immediately on the next iteration -
 # jobs are never held up waiting for the rest of a fixed batch to finish.
+#
+# Dispatch is capped to a small chunk (<= 10) per pass, independent of
+# -BatchSize (the in-flight window size). Each entry's copy-job timeout
+# clock starts ticking the moment it is dispatched, but it can only be
+# CHECKED during a poll pass - if dispatch filled the entire window (e.g.
+# 50 items) before ever polling, and a handful of those dispatch calls hit
+# Graph throttling/retries (each retry backs off up to 60 sec), the whole
+# fill phase can silently take many minutes. Every already-dispatched entry
+# then shows as "timed out" the instant polling finally runs, even though
+# it was never actually given -MonitorTimeoutSec of real wait time - it was
+# just starved waiting for its turn to be checked. Chunking dispatch keeps a
+# poll pass running every <= 10 dispatches so stalls are caught immediately
+# instead of masquerading as mass simultaneous copy-job timeouts.
+$dispatchChunk = [Math]::Min($BatchSize, 10)
 while ($nextIndex -lt $totalWork -or $inFlight.Count -gt 0) {
-    while ($inFlight.Count -lt $BatchSize -and $nextIndex -lt $totalWork) {
+    $chunkSw = [Diagnostics.Stopwatch]::StartNew()
+    $dispatchedThisPass = 0
+    while ($inFlight.Count -lt $BatchSize -and $nextIndex -lt $totalWork -and $dispatchedThisPass -lt $dispatchChunk) {
+        $dispatchedThisPass++
         $item = $work[$nextIndex]
         $nextIndex++
         $upn  = $item.UserPrincipalName
@@ -679,6 +696,10 @@ while ($nextIndex -lt $totalWork -or $inFlight.Count -gt 0) {
         }
 
         if ($ThrottleMs -gt 0) { Start-Sleep -Milliseconds $ThrottleMs }
+    }
+
+    if ($dispatchedThisPass -gt 0 -and $chunkSw.Elapsed.TotalSeconds -ge 20) {
+        Write-Log "Dispatching $dispatchedThisPass file(s) took $([int]$chunkSw.Elapsed.TotalSeconds)s - likely Graph throttling/retries. Consider lowering -BatchSize/-ThrottleMs if this repeats." "WARN"
     }
 
     if ($inFlight.Count -eq 0) { continue }
