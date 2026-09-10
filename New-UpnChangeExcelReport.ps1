@@ -1,13 +1,16 @@
 <#
 .SYNOPSIS
-    Turns a UpnChangeReport CSV (from Update-UserUpn.ps1) into a formatted
-    Excel workbook, enriched with each user's OneDrive data size.
+    Turns one or more UpnChangeReport CSVs (from Update-UserUpn.ps1) into a
+    single formatted Excel workbook, enriched with each user's OneDrive
+    data size.
 
 .DESCRIPTION
-    Reads the UPN-change report CSV, splits the Timestamp column into
-    separate Date/Time columns, and (optionally) looks up each user's
-    OneDrive storage usage via PnP.PowerShell so the report shows how much
-    data is associated with each migrated account.
+    Reads one or more UPN-change report CSVs (e.g. from separate pilot/wave
+    runs), merges them into a single report tagged with a SourceFile
+    column, splits the Timestamp column into separate Date/Time columns,
+    and (optionally) looks up each user's OneDrive storage usage via
+    PnP.PowerShell so the report shows how much data is associated with
+    each migrated account.
 
     Produces a two-sheet .xlsx:
       - "UPN Change Report": one row per user, colour-coded by Status,
@@ -26,7 +29,10 @@
     still generated, just without the DataSizeGB column populated.
 
 .PARAMETER UpnChangeReportCsv
-    Path to the UpnChangeReport_*.csv produced by Update-UserUpn.ps1.
+    One or more paths to UpnChangeReport_*.csv files produced by
+    Update-UserUpn.ps1. Accepts multiple values (comma-separated) and/or
+    wildcards, e.g. -UpnChangeReportCsv .\UpnChangeReport_*.csv or
+    -UpnChangeReportCsv .\Wave1.csv,.\Wave2.csv
 
 .PARAMETER OutputXlsx
     Path for the output workbook. Defaults to
@@ -42,6 +48,12 @@
     Register one with:
         Register-PnPEntraIDAppForInteractiveLogin -ApplicationName "PnP.PowerShell" -Tenant yourtenant.onmicrosoft.com
 
+.PARAMETER LatestPerUserOnly
+    When multiple input files contain the same user (e.g. a failed attempt
+    in one wave, retried successfully in a later wave), keep only that
+    user's most recent row (by Timestamp) instead of showing every attempt.
+    Matches on OldUserPrincipalName. Default: keep every row (full history).
+
 .EXAMPLE
     .\New-UpnChangeExcelReport.ps1 -UpnChangeReportCsv .\UpnChangeReport_20260910_101500.csv `
         -AdminUrl https://kaaratec-admin.sharepoint.com -ClientId <appId>
@@ -49,12 +61,20 @@
 .EXAMPLE
     # Without OneDrive size lookup
     .\New-UpnChangeExcelReport.ps1 -UpnChangeReportCsv .\UpnChangeReport_20260910_101500.csv
+
+.EXAMPLE
+    # Merge multiple wave reports into one workbook
+    .\New-UpnChangeExcelReport.ps1 -UpnChangeReportCsv .\UpnChangeReport_*.csv `
+        -AdminUrl https://kaaratec-admin.sharepoint.com -ClientId <appId>
+
+.EXAMPLE
+    .\New-UpnChangeExcelReport.ps1 -UpnChangeReportCsv .\Wave1.csv,.\Wave2.csv,.\Wave3.csv
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$UpnChangeReportCsv,
+    [string[]]$UpnChangeReportCsv,
 
     [Parameter(Mandatory = $false)]
     [string]$OutputXlsx,
@@ -63,7 +83,10 @@ param(
     [string]$AdminUrl,
 
     [Parameter(Mandatory = $false)]
-    [string]$ClientId
+    [string]$ClientId,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$LatestPerUserOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,19 +95,53 @@ function Write-Ok    { param([string]$Text) Write-Host "   OK   $Text" -Foregrou
 function Write-Warn2 { param([string]$Text) Write-Host "   WARN $Text" -ForegroundColor Yellow }
 function Write-Step  { param([string]$Text) Write-Host "-> $Text" -ForegroundColor Yellow }
 
-if (-not (Test-Path $UpnChangeReportCsv)) { throw "UpnChangeReportCsv not found: $UpnChangeReportCsv" }
 if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
     throw "Required module 'ImportExcel' is not installed. Run: Install-Module ImportExcel -Scope CurrentUser"
 }
 Import-Module ImportExcel -ErrorAction Stop
 
+# Resolve every path/wildcard passed in -UpnChangeReportCsv into a de-duplicated
+# list of actual files, so callers can pass multiple paths and/or wildcards.
+$resolvedFiles = foreach ($pattern in $UpnChangeReportCsv) {
+    $matches = @(Resolve-Path -Path $pattern -ErrorAction SilentlyContinue)
+    if ($matches.Count -eq 0) {
+        Write-Warn2 "No files matched: $pattern"
+        continue
+    }
+    $matches.Path
+}
+$resolvedFiles = @($resolvedFiles | Select-Object -Unique)
+if ($resolvedFiles.Count -eq 0) { throw "No UpnChangeReport CSV files found for: $($UpnChangeReportCsv -join ', ')" }
+Write-Step "Loading $($resolvedFiles.Count) report file(s):"
+$resolvedFiles | ForEach-Object { Write-Host "     $_" -ForegroundColor Gray }
+
 if (-not $OutputXlsx) {
-    $dir = Split-Path -Parent (Resolve-Path $UpnChangeReportCsv)
-    $OutputXlsx = Join-Path $dir "UpnChangeReport_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+    $dir = Split-Path -Parent $resolvedFiles[0]
+    $OutputXlsx = Join-Path $dir "UpnChangeReport_Combined_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
 }
 
-$rows = Import-Csv -Path $UpnChangeReportCsv
-if ($rows.Count -eq 0) { throw "No rows found in $UpnChangeReportCsv" }
+$rows = foreach ($file in $resolvedFiles) {
+    $fileRows = Import-Csv -Path $file
+    foreach ($r in $fileRows) {
+        $r | Add-Member -NotePropertyName SourceFile -NotePropertyValue (Split-Path -Leaf $file) -PassThru
+    }
+}
+$rows = @($rows)
+if ($rows.Count -eq 0) { throw "No rows found across: $($resolvedFiles -join ', ')" }
+Write-Ok "Loaded $($rows.Count) total row(s) across $($resolvedFiles.Count) file(s)"
+
+if ($LatestPerUserOnly) {
+    $before = $rows.Count
+    $rows = @(
+        $rows | ForEach-Object {
+            $ts = $null; [datetime]::TryParse($_.Timestamp, [ref]$ts) | Out-Null
+            $_ | Add-Member -NotePropertyName _SortTs -NotePropertyValue $ts -PassThru -Force
+        } |
+        Group-Object OldUserPrincipalName |
+        ForEach-Object { $_.Group | Sort-Object _SortTs | Select-Object -Last 1 }
+    )
+    Write-Ok "Collapsed to latest attempt per user: $before -> $($rows.Count) row(s)"
+}
 
 function Get-OneDrivePath {
     param([string]$Upn)
@@ -131,6 +188,7 @@ $enriched = foreach ($row in $rows) {
     }
 
     [PSCustomObject]@{
+        SourceFile           = $row.SourceFile
         Date                 = if ($dt) { $dt.ToString('yyyy-MM-dd') } else { '' }
         Time                 = if ($dt) { $dt.ToString('HH:mm:ss') } else { '' }
         DisplayName          = $row.DisplayName
@@ -151,7 +209,7 @@ $totalSizeGB  = [math]::Round((($enriched | Where-Object { $_.DataSizeGB } | Mea
 
 $summary = [ordered]@{
     'Report Generated'          = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-    'Source Report'             = (Split-Path -Leaf $UpnChangeReportCsv)
+    'Source Reports'            = ($resolvedFiles | ForEach-Object { Split-Path -Leaf $_ }) -join ', '
     'Total Users in Report'     = $enriched.Count
 }
 foreach ($sc in $statusCounts) { $summary["Status: $($sc.Name)"] = $sc.Count }
