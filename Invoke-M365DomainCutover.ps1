@@ -342,7 +342,7 @@ function Get-TargetUsers {
             $upn = $row.UserPrincipalName.Trim()
             if (-not $upn) { continue }
             try {
-                Get-MgUser -UserId $upn -Property $props
+                Get-MgUser -UserId $upn -Property $props -ErrorAction Stop
             } catch {
                 Write-Warn "Not found in directory, skipped: $upn"
                 Add-Action 'Resolve' $upn 'Lookup' 'User not found' 'Skipped' $_.Exception.Message
