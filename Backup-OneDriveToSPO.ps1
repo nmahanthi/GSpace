@@ -202,6 +202,11 @@ function Assert-Module {
 # instead of hanging.
 $script:LastConnectTime = $null
 $script:GraphRunspace   = $null
+# Hosts (from copy-job monitor URLs) confirmed unreachable from this network
+# this run - once one host is known bad, every other file's monitor URL on
+# that same host skips straight to the existence-check fallback instead of
+# re-paying the ~90 sec (3 x 30 sec) discovery tax per file.
+$script:UnreachableMonitorHosts = New-Object System.Collections.Generic.HashSet[string]
 
 function New-GraphRunspace {
     if ($script:GraphRunspace) {
@@ -683,7 +688,14 @@ while ($nextIndex -lt $totalWork -or $inFlight.Count -gt 0) {
             if (-not $monitorUrl) {
                 Add-BackupResult -Item $item -Status "Success" -Detail ""
             } else {
-                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; DestDriveId = $destDriveId; DestFolderId = $targetFolderId; Started = [Diagnostics.Stopwatch]::StartNew(); LastLogSec = 0; PollErrors = 0; UseExistenceCheck = $false })
+                # If this monitor URL's host has already proven unreachable from
+                # this network earlier in the run (see poll loop below), don't
+                # pay the ~90 sec (3 x 30 sec) tax discovering that again for
+                # every single new file - most files share the same monitor
+                # host, so skip straight to the existence-check fallback.
+                $skipMonitor = $false
+                try { if ($script:UnreachableMonitorHosts.Contains(([Uri]$monitorUrl).Host)) { $skipMonitor = $true } } catch {}
+                $inFlight.Add([PSCustomObject]@{ Item = $item; MonitorUrl = $monitorUrl; DestDriveId = $destDriveId; DestFolderId = $targetFolderId; Started = [Diagnostics.Stopwatch]::StartNew(); LastLogSec = 0; PollErrors = 0; UseExistenceCheck = $skipMonitor })
             }
         } catch {
             $msg = $_.Exception.Message
@@ -754,14 +766,27 @@ while ($nextIndex -lt $totalWork -or $inFlight.Count -gt 0) {
             if ($entry.PollErrors -eq 3) {
                 Write-Log "[$($item.UserPrincipalName)] $($item.FileName): monitor URL unreachable after 3 attempts, switching to destination existence check" "WARN"
                 $entry.UseExistenceCheck = $true
+                try {
+                    $badHost = ([Uri]$entry.MonitorUrl).Host
+                    if ($script:UnreachableMonitorHosts.Add($badHost)) {
+                        Write-Log "Monitor host '$badHost' is unreachable from this network - all further files will skip it and use the existence check directly." "WARN"
+                    }
+                } catch {}
             }
             $stillPending.Add($entry); continue
         }
         if ($status.status -eq "completed") {
             Add-BackupResult -Item $item -Status "Success" -Detail ""
         } elseif ($status.status -in @("failed", "cannotConvert", "malwareDetected")) {
-            Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) $($status.statusDescription)" "ERROR"
-            Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $($status.statusDescription)"
+            # statusDescription is frequently empty on a genuine failure - surface
+            # the nested error object (code/message) too, when present, since
+            # that is usually the only clue as to why (e.g. quota exceeded,
+            # access denied on the destination, name/path too long).
+            $errDetail = $status.statusDescription
+            if ($status.error) { $errDetail = "$errDetail [$($status.error.code)] $($status.error.message)".Trim() }
+            if (-not $errDetail) { $errDetail = "(no detail returned by Graph)" }
+            Write-Log "[$($item.UserPrincipalName)] $($item.FileName): copy failed: $($status.status) - $errDetail" "ERROR"
+            Add-BackupResult -Item $item -Status "Failed" -Detail "$($status.status): $errDetail"
         } else {
             $elapsedSec = [int]$entry.Started.Elapsed.TotalSeconds
             if ($elapsedSec -ge $entry.LastLogSec + 30) {
