@@ -13,13 +13,14 @@
     Requires: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
     Graph permissions (read-only): User.Read.All, Organization.Read.All, AuditLog.Read.All, Reports.Read.All
       (application permissions for unattended use; delegated scopes are requested when signing in interactively).
-    Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PricePerUserMonth).
+    Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PriceUSD,PriceINR; per user per month).
     The shipped prices are PLACEHOLDERS: replace them with the customer's real contract prices.
     Sign-in data (signInActivity) needs Entra ID P1 or higher; if unavailable, inactive-user checks are skipped.
     Usage reports show real user names only if the tenant setting "Display concealed user, group and site names" is off;
     otherwise email-only detection is skipped.
 .EXAMPLE
-    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -Open
+    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -Open            # USD and INR reports
+    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -Currencies INR  # INR only
     ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO
 #>
 [CmdletBinding()]
@@ -29,7 +30,7 @@ param(
     [string]$ClientId,
     [string]$SecretEnvVar,
     [string]$PricesCsv = (Join-Path $PSScriptRoot 'prices.csv'),
-    [string]$Currency = 'GBP',
+    [ValidateSet('USD','INR')] [string[]]$Currencies = @('USD','INR'),   # one report per currency
     [int]$InactiveDays = 90,
     [string]$EmailOnlyTargetSku = 'EXCHANGESTANDARD',
     [string]$OutputDir = (Join-Path $PSScriptRoot 'output'),
@@ -38,8 +39,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $safe = ($CustomerName -replace '[^\w\-]', '_')
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
-$sym = switch ($Currency) { 'GBP' {'£'} 'USD' {'$'} 'EUR' {'€'} default {"$Currency "} }
-function Format-Money([double]$v) { '{0}{1:N0}' -f $sym, $v }
+function Format-Money([double]$v) {
+    if ($Currency -eq 'INR') {   # Indian digit grouping: 12,34,567
+        $n = [string][math]::Round([math]::Abs($v)); $sign = if ($v -lt 0) { '-' } else { '' }
+        if ($n.Length -gt 3) { $n = ($n.Substring(0, $n.Length - 3) -replace '\B(?=(\d{2})+$)', ',') + ',' + $n.Substring($n.Length - 3) }
+        return "$sign$sym$n"
+    }
+    '{0}{1:N0}' -f $sym, $v
+}
 
 # ---- Connect ---------------------------------------------------------------
 if ($ClientId -and $SecretEnvVar -and $TenantId) {
@@ -62,12 +69,6 @@ function Get-GraphAll([string]$Uri) {
     $items
 }
 
-# ---- Prices ----------------------------------------------------------------
-$price = @{}; $friendly = @{}
-foreach ($p in Import-Csv $PricesCsv) {
-    $price[$p.SkuPartNumber] = [double]$p.PricePerUserMonth
-    $friendly[$p.SkuPartNumber] = $p.FriendlyName
-}
 function Get-SkuName($sku) { if ($friendly[$sku]) { $friendly[$sku] } else { $sku } }
 
 # ---- Collect ---------------------------------------------------------------
@@ -77,7 +78,8 @@ $skuById = @{}; foreach ($s in $skus) { $skuById[$s.skuId] = $s }
 $planSets = @{}
 foreach ($s in $skus) { $planSets[$s.skuId] = [Collections.Generic.HashSet[string]]::new([string[]]@($s.servicePlans | ForEach-Object { $_.servicePlanId })) }
 
-$warnings = @()
+$baseWarnings = @()
+$warnings = $baseWarnings
 Write-Verbose 'Reading users'
 $sel = 'id,displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime'
 $haveSignIn = $true
@@ -104,6 +106,16 @@ try {
     }
 } catch { $warnings += "Usage report unavailable: $($_.Exception.Message)" }
 
+$baseWarnings = @($warnings)
+$allOutputs = @()
+foreach ($Currency in $Currencies) {
+$sym = if ($Currency -eq 'INR') { '₹' } else { '$' }
+$warnings = @($baseWarnings)
+$price = @{}; $friendly = @{}
+foreach ($p in Import-Csv $PricesCsv) {
+    $price[$p.SkuPartNumber] = [double]$p."Price$Currency"
+    $friendly[$p.SkuPartNumber] = $p.FriendlyName
+}
 # ---- Per-SKU summary (spend and unassigned seats) -------------------------
 $skuRows = foreach ($s in $skus) {
     $name = $s.skuPartNumber
@@ -205,9 +217,9 @@ $tips += "<b>Remove unused add-ons</b> (Visio, Project, Power BI Pro, Defender/P
 $tips += "<b>Re-run quarterly.</b> This script is read-only and safe to schedule."
 
 # ---- Output files ----------------------------------------------------------
-$csvPath = Join-Path $OutputDir "$safe-licensing-actions.csv"
+$csvPath = Join-Path $OutputDir "$safe-licensing-actions-$Currency.csv"
 $findings | Sort-Object MonthlySaving -Descending | Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
-$jsonPath = Join-Path $OutputDir "$safe-licensing.json"
+$jsonPath = Join-Path $OutputDir "$safe-licensing-$Currency.json"
 [ordered]@{
     CustomerName = $CustomerName; Currency = $Currency; GeneratedOn = (Get-Date -Format 'yyyy-MM-dd'); InactiveDays = $InactiveDays
     MonthlySpend = $monthlySpend; MonthlyWaste = $totalMonthly; AnnualSaving = $totalMonthly * 12; WastePercent = $pct
@@ -239,7 +251,7 @@ th{background:#f4f4f4;cursor:pointer}.bar{height:14px;background:#e67e22;border-
 .warn{background:#fff6e0;border:1px solid #f0c36d;padding:.6em 1em;margin:1em 0;border-radius:6px}small{color:#777}
 </style></head><body>
 <h1>Microsoft 365 licence savings - $(& $enc $CustomerName)</h1>
-<p>Generated $(Get-Date -Format 'yyyy-MM-dd'). Prices come from prices.csv and are estimates: confirm against the customer's agreement.</p>
+<p>Generated $(Get-Date -Format 'yyyy-MM-dd'). Amounts are in $Currency. Prices come from prices.csv (PriceUSD / PriceINR) and are estimates: confirm against the customer's agreement.</p>
 $warnHtml
 <div class='cards'>
 <div class='card'>Current licence spend<div class='n'>$(Format-Money $monthlySpend)/mo</div>$(Format-Money ($monthlySpend*12))/yr</div>
@@ -256,9 +268,10 @@ $warnHtml
 <p><small>Each user is counted once (disabled, then inactive, then redundant, then email-only). Unassigned seats can usually only be removed at renewal. Review every action with the customer before removing licences.</small></p>
 </body></html>
 "@
-$htmlPath = Join-Path $OutputDir "$safe-licensing.html"
+$htmlPath = Join-Path $OutputDir "$safe-licensing-$Currency.html"
 $html | Set-Content $htmlPath -Encoding UTF8
-Disconnect-MgGraph | Out-Null
-Write-Output "Report: $htmlPath"
-Write-Output "Actions: $csvPath"
+Write-Output "Report ($Currency): $htmlPath"
+Write-Output "Actions ($Currency): $csvPath"
 if ($Open) { try { Invoke-Item $htmlPath } catch { Write-Warning 'Could not open browser automatically.' } }
+}
+Disconnect-MgGraph | Out-Null
