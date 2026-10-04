@@ -1,0 +1,20 @@
+SkuPartNumber,FriendlyName,PricePerUserMonth
+O365_BUSINESS_ESSENTIALS,Microsoft 365 Business Basic,5.00
+O365_BUSINESS_PREMIUM,Microsoft 365 Business Standard,10.50
+SPB,Microsoft 365 Business Premium,18.50
+EXCHANGESTANDARD,Exchange Online (Plan 1),3.30
+STANDARDPACK,Office 365 E1,7.50
+ENTERPRISEPACK,Office 365 E3,19.80
+ENTERPRISEPREMIUM,Office 365 E5,32.00
+SPE_E3,Microsoft 365 E3,33.50
+SPE_E5,Microsoft 365 E5,53.50
+SPE_F1,Microsoft 365 F3,6.50
+EMS,Enterprise Mobility + Security E3,8.00
+EMSPREMIUM,Enterprise Mobility + Security E5,12.50
+AAD_PREMIUM,Entra ID P1,5.40
+AAD_PREMIUM_P2,Entra ID P2,8.10
+POWER_BI_PRO,Power BI Pro,8.20
+VISIOCLIENT,Visio Plan 2,12.80
+PROJECTPROFESSIONAL,Project Plan 3,25.00
+POWER_BI_STANDARD,Power BI (free),0
+FLOW_FREE,Power Automate Free,0
