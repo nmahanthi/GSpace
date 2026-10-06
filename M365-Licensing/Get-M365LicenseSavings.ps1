@@ -208,6 +208,45 @@ foreach ($u in $licensedUsers) {
     }
 }
 
+# ---- Validation: cross-checks and evidence files ---------------------------
+# 1. Seats counted from users vs Microsoft's own consumedUnits per SKU
+$counted = @{}
+foreach ($u in $users) { foreach ($l in @($u.assignedLicenses)) { $counted[$l.skuId] = 1 + [int]$counted[$l.skuId] } }
+foreach ($r in $skuRows) {
+    $sid = ($skus | Where-Object skuPartNumber -eq $r.Sku | Select-Object -First 1).skuId
+    if ([int]$counted[$sid] -ne [int]$r.Assigned) { $warnings += "CHECK: $($r.Name) shows $($r.Assigned) assigned in Microsoft's SKU list but $([int]$counted[$sid]) users hold it (group-based or recently changed licences can cause small gaps)." }
+}
+# 2. SKUs with no price or zero price are excluded from money figures
+$noPrice = @($skuRows | Where-Object { $null -eq $_.Price } | ForEach-Object { $_.Sku })
+if ($noPrice.Count) { $warnings += "CHECK: $($noPrice.Count) licence(s) have no price in prices.csv and are NOT in any money figure: $($noPrice -join ', '). Add them to prices.csv." }
+# 3. Trial, suspended or warning-state subscriptions
+foreach ($s2 in $skus) {
+    $susp = [int]$s2.prepaidUnits.suspended; $warn2 = [int]$s2.prepaidUnits.warning
+    if ($susp -or $warn2) { $warnings += "CHECK: $($s2.skuPartNumber) has $susp suspended and $warn2 in-warning units; these are not counted as purchased." }
+}
+# 4. Sign-in data completeness
+if ($haveSignIn) {
+    $noSign = @($licensedUsers | Where-Object { -not $_.signInActivity -or (-not $_.signInActivity.lastSuccessfulSignInDateTime -and -not $_.signInActivity.lastSignInDateTime) }).Count
+    if ($noSign) { $warnings += "CHECK: $noSign licensed user(s) have no sign-in record. Those older than $InactiveDays days are treated as never signed in; accounts used only by services or shared mailboxes may be listed wrongly." }
+}
+$sharedLike = @($licensedUsers | Where-Object { $_.userPrincipalName -match '^(info|admin|support|sales|noreply|no-reply|accounts|hr|service|shared)@' }).Count
+if ($sharedLike) { $warnings += "CHECK: $sharedLike licensed account(s) look like shared or service mailboxes by name; confirm before removing licences." }
+
+# Evidence: every licensed user and how it was classified
+$catByUpn = @{}; foreach ($f in $findings) { $catByUpn[$f.UPN] = $f }
+$evUsers = foreach ($u in $licensedUsers) {
+    $last = Get-LastSignIn $u; $paid = @(Get-PaidLicenses $u); $f = $catByUpn[$u.userPrincipalName]
+    [pscustomobject]@{
+        UPN = $u.userPrincipalName; Name = $u.displayName; Enabled = $u.accountEnabled; Type = $u.userType
+        LastSignIn = $(if ($last) { $last.ToString('yyyy-MM-dd') } else { '' })
+        Licences = (@($u.assignedLicenses | ForEach-Object { $skuById[$_.skuId].skuPartNumber }) -join '; ')
+        MonthlyLicenceCost = ($paid | ForEach-Object { $price[$_.skuPartNumber] } | Measure-Object -Sum).Sum
+        Classified = $(if ($f) { $f.Category } else { 'Keep' }); SavingPerMonth = $(if ($f) { $f.MonthlySaving } else { 0 })
+    }
+}
+$evUsers | Export-Csv (Join-Path $OutputDir "$safe-evidence-users-$Currency.csv") -NoTypeInformation -Encoding UTF8
+$skuRows | Export-Csv (Join-Path $OutputDir "$safe-evidence-skus-$Currency.csv") -NoTypeInformation -Encoding UTF8
+
 # ---- Totals ----------------------------------------------------------------
 $monthlySpend = ($skuRows | Measure-Object MonthlySpend -Sum).Sum
 $unassignedWaste = ($skuRows | Measure-Object UnassignedWaste -Sum).Sum
@@ -219,6 +258,9 @@ $totalMonthly = $unassignedWaste + $userWaste
 $conservativeMonthly = $unassignedWaste + (($findings | Where-Object Confidence -eq 'High' | Measure-Object MonthlySaving -Sum).Sum)
 $unusedSkus = @($skuRows | Where-Object { $_.Assigned -eq 0 -and $_.Purchased -gt 0 -and $_.Price -gt 0 })
 $pct = if ($monthlySpend) { [math]::Round(100 * $totalMonthly / $monthlySpend, 1) } else { 0 }
+$reviewMonthly = $totalMonthly - $conservativeMonthly
+$reviewCount = @($findings | Where-Object Confidence -ne 'High').Count
+$confirmedPct = if ($monthlySpend) { [math]::Round(100 * $conservativeMonthly / $monthlySpend, 1) } else { 0 }
 
 $tips = @()
 if ($unusedSkus.Count) { $tips += "<b>Cancel unused subscriptions.</b> No users are assigned: $(($unusedSkus | ForEach-Object { $_.Name }) -join ', ')." }
@@ -235,7 +277,7 @@ $findings | Sort-Object MonthlySaving -Descending | Export-Csv $csvPath -NoTypeI
 $jsonPath = Join-Path $OutputDir "$safe-licensing-$Currency.json"
 [ordered]@{
     CustomerName = $CustomerName; Currency = $Currency; GeneratedOn = (Get-Date -Format 'yyyy-MM-dd'); InactiveDays = $InactiveDays
-    MonthlySpend = $monthlySpend; ConservativeAnnualSaving = $conservativeMonthly * 12; MonthlyWaste = $totalMonthly; AnnualSaving = $totalMonthly * 12; WastePercent = $pct
+    MonthlySpend = $monthlySpend; ConservativeAnnualSaving = $conservativeMonthly * 12; ConfirmedMonthlyWaste = $conservativeMonthly; ReviewMonthly = $reviewMonthly; MonthlyWaste = $totalMonthly; AnnualSaving = $totalMonthly * 12; WastePercent = $pct
     UnassignedSeatsWaste = $unassignedWaste; Skus = $skuRows; Categories = $byCat; Warnings = @($warnings | Select-Object -Unique)
 } | ConvertTo-Json -Depth 5 | Set-Content $jsonPath -Encoding UTF8
 
@@ -268,9 +310,9 @@ th{background:#f4f4f4;cursor:pointer}.bar{height:14px;background:#e67e22;border-
 $warnHtml
 <div class='cards'>
 <div class='card'>Current licence spend<div class='n'>$(Format-Money $monthlySpend)/mo</div>$(Format-Money ($monthlySpend*12))/yr</div>
-<div class='card'>Identified waste<div class='n bad'>$(Format-Money $totalMonthly)/mo</div>$pct% of spend</div>
-<div class='card'>Potential annual saving<div class='n good'>$(Format-Money ($totalMonthly*12))</div>$($findings.Count) user actions</div>
-<div class='card'>Conservative annual saving<div class='n good'>$(Format-Money ($conservativeMonthly*12))</div>high-confidence items only</div>
+<div class='card'>Confirmed waste<div class='n bad'>$(Format-Money $conservativeMonthly)/mo</div>$confirmedPct% of spend: unassigned seats, disabled accounts, duplicate licences</div>
+<div class='card'>To review with the customer<div class='n'>$(Format-Money $reviewMonthly)/mo</div>$reviewCount users: inactive or email-only. Not yet waste until confirmed</div>
+<div class='card'>Annual saving<div class='n good'>$(Format-Money ($conservativeMonthly*12))</div>confirmed only; $(Format-Money ($totalMonthly*12)) if every review item is accepted</div>
 </div>
 <h2>Where the waste is</h2>
 <table><tr><th>Category</th><th>Users</th><th>Saving / month</th><th></th></tr>$catHtml</table>
@@ -377,6 +419,7 @@ $(Row 'Net profit' $tc.Net $tf.Net 'tot')
 }
 Write-Output "Report ($Currency): $htmlPath"
 Write-Output "Actions ($Currency): $csvPath"
+Write-Output "Evidence ($Currency): $(Join-Path $OutputDir "$safe-evidence-users-$Currency.csv")"
 if ($Open) { try { Invoke-Item $htmlPath } catch { Write-Warning 'Could not open browser automatically.' } }
 }
 Disconnect-MgGraph | Out-Null
