@@ -1,0 +1,30 @@
+name: M365 backup gap campaign
+on:
+  schedule:
+    - cron: '0 7 1 * *'   # 07:00 UTC on the 1st of each month
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write customer list from secret
+        run: printf '%s' "$CUSTOMERS_CSV" > M365-Backup-Gap/customers.csv
+        env:
+          CUSTOMERS_CSV: ${{ secrets.CUSTOMERS_CSV }}
+      - name: Install Graph module
+        shell: pwsh
+        run: Install-Module Microsoft.Graph.Authentication, ExchangeOnlineManagement -Scope CurrentUser -Force
+      - name: Run campaign
+        shell: pwsh
+        working-directory: M365-Backup-Gap
+        run: ./Invoke-BackupGapCampaign.ps1 -CustomersCsv ./customers.csv -PricePerUser ${{ vars.PRICE_PER_USER || 3 }} -YourName '${{ vars.YOUR_NAME || 'Your Name' }}'
+        env:
+          # Add one line per customer, matching SecretEnvVar in the CSV
+          M365_SECRET_CONTOSO: ${{ secrets.M365_SECRET_CONTOSO }}
+          M365_PFX_CONTOSO: ${{ secrets.M365_PFX_CONTOSO }}
+          M365_PFXPW_CONTOSO: ${{ secrets.M365_PFXPW_CONTOSO }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backup-gap-output
+          path: M365-Backup-Gap/output/
