@@ -345,7 +345,7 @@ if (-not $SkipPartnerReport) {
         foreach ($f in $list) { foreach ($k in $minutes.Keys) { if ($f.Category -like "$k*") { $sum += $minutes[$k]; break } } }
         $sum
     }
-    $users = $licensedUsers.Count
+    $licensedCount = $licensedUsers.Count
     $highF = @($findings | Where-Object Confidence -eq 'High')
     $renewH = (@($skuRows | Where-Object { $_.Unassigned -gt 0 }).Count * $renewMin) / 60
     $cleanHcons = ((Get-ActionMinutes $highF) / 60) + $renewH
@@ -364,10 +364,10 @@ if (-not $SkipPartnerReport) {
             'Fixed audit fee'               = $fixedFee
             'Billable clean-up work'        = $ch * $bill
             'Licence resale margin (CSP)'   = $csp * $residual
-            'Backup resale (customer pays)' = $users * $bkPrice * 12
+            'Backup resale (customer pays)' = $licensedCount * $bkPrice * 12
         }
         $costs = [ordered]@{
-            'Backup vendor cost'            = $users * $bkCost * 12
+            'Backup vendor cost'            = $licensedCount * $bkCost * 12
             'Your time (cost basis)'        = $hrs * $cost
             'Tooling'                       = $tool * 12
         }
