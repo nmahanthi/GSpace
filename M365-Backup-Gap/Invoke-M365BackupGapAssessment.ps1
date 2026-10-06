@@ -15,11 +15,11 @@
           or omit them to sign in interactively as a customer admin (delegated).
     Note: tenant report names may be concealed by the customer; totals are unaffected.
 .EXAMPLE
-    ./Invoke-M365BackupGapAssessment.ps1 -CustomerName "Contoso" -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO -PricePerUser 3
+    ./Invoke-M365BackupGapAssessment.ps1 -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO -PricePerUser 3
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)] [string]$CustomerName,
+    [string]$CustomerName,   # optional: defaults to the tenant's own name
     [string]$TenantId,
     [string]$ClientId,
     [string]$SecretEnvVar,
@@ -29,7 +29,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$safeName = ($CustomerName -replace '[^\w\-]', '_')
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
 # ---- Connect ---------------------------------------------------------------
@@ -68,9 +67,10 @@ function Get-UsageTotalGB([string]$Report) {
 }
 
 # ---- Collect ---------------------------------------------------------------
-Write-Host "Assessing $CustomerName ..." -ForegroundColor Cyan
-
 $org = (Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization').value[0]
+if (-not $CustomerName) { $CustomerName = if ($org.displayName) { $org.displayName } elseif ($TenantId) { $TenantId } else { 'Tenant' } }
+$safeName = ($CustomerName -replace '[^\w\-]', '_')
+Write-Host "Assessing $CustomerName ..." -ForegroundColor Cyan
 
 $licensed = (Invoke-MgGraphRequest -Method GET -Headers @{ ConsistencyLevel = 'eventual' } `
     -Uri 'https://graph.microsoft.com/v1.0/users?$filter=assignedLicenses/$count ne 0 and userType eq ''Member''&$count=true&$top=1').'@odata.count'

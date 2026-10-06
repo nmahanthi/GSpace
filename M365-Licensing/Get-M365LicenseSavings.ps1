@@ -19,13 +19,13 @@
     Usage reports show real user names only if the tenant setting "Display concealed user, group and site names" is off;
     otherwise email-only detection is skipped.
 .EXAMPLE
-    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -Open            # USD and INR reports
-    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -Currencies INR  # INR only
-    ./Get-M365LicenseSavings.ps1 -CustomerName Contoso -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO
+    ./Get-M365LicenseSavings.ps1 -TenantId <guid> -Open            # USD and INR reports
+    ./Get-M365LicenseSavings.ps1 -TenantId <guid> -Currencies INR  # INR only
+    ./Get-M365LicenseSavings.ps1 -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO
 #>
 [CmdletBinding()]
 param(
-    [string]$CustomerName = 'Customer',
+    [string]$CustomerName,   # optional: defaults to the tenant's own name
     [string]$TenantId,
     [string]$ClientId,
     [string]$SecretEnvVar,
@@ -39,7 +39,6 @@ param(
     [switch]$Open
 )
 $ErrorActionPreference = 'Stop'
-$safe = ($CustomerName -replace '[^\w\-]', '_')
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 function Format-Money([double]$v) {
     if ($Currency -eq 'INR') {   # Indian digit grouping: 12,34,567
@@ -61,6 +60,12 @@ if ($ClientId -and $SecretEnvVar -and $TenantId) {
     $scopes = 'User.Read.All','Organization.Read.All','AuditLog.Read.All','Reports.Read.All'
     if ($TenantId) { Connect-MgGraph -TenantId $TenantId -Scopes $scopes -NoWelcome } else { Connect-MgGraph -Scopes $scopes -NoWelcome }
 }
+
+if (-not $CustomerName) {
+    $CustomerName = try { (Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization').value[0].displayName } catch { $null }
+    if (-not $CustomerName) { $CustomerName = if ($TenantId) { $TenantId } else { 'Tenant' } }
+}
+$safe = ($CustomerName -replace '[^\w\-]', '_')
 
 function Get-GraphAll([string]$Uri) {
     $items = @()
