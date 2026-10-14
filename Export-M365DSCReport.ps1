@@ -108,6 +108,16 @@ function Write-Ok   { param([string]$Text) Write-Host "   OK   $Text" -Foregroun
 function Write-Warn { param([string]$Text) Write-Host "   WARN $Text" -ForegroundColor Yellow }
 function Write-Info { param([string]$Text) Write-Host "        $Text" }
 
+function Install-RequiredModuleVersion {
+    param([string]$Name, [string]$Version)
+    if (Get-Command Install-PSResource -ErrorAction SilentlyContinue) {
+        Install-PSResource -Name $Name -Version $Version -Scope CurrentUser -Repository PSGallery -TrustRepository -AcceptLicense -SkipDependencyCheck -Reinstall
+    }
+    else {
+        Install-Module -Name $Name -RequiredVersion $Version -Scope CurrentUser -Repository PSGallery -Force -AllowClobber -SkipPublisherCheck
+    }
+}
+
 $NonM365Workloads = @('ADO', 'AZURE', 'SENTINEL', 'SH')
 $ReportExtensions = @{ HTML = 'html'; Excel = 'xlsx'; CSV = 'csv'; JSON = 'json'; Markdown = 'md' }
 $CertSubject      = "CN=M365DSC-$ClientId"
@@ -122,19 +132,11 @@ Write-Step 'Checking Microsoft365DSC module'
 $module = Get-Module -ListAvailable -Name Microsoft365DSC | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $module) {
     if (-not $InstallPrerequisites) {
-        throw 'Microsoft365DSC is not installed. Re-run with -InstallPrerequisites, or run: Install-Module Microsoft365DSC -Scope CurrentUser; Update-M365DSCDependencies -Scope CurrentUser'
+        throw 'Microsoft365DSC is not installed. Re-run with -InstallPrerequisites.'
     }
     Write-Info 'Installing Microsoft365DSC (current user scope)...'
     Install-Module -Name Microsoft365DSC -Scope CurrentUser -Force -AllowClobber
-    Import-Module Microsoft365DSC -Force
-    Write-Info 'Installing Microsoft365DSC dependencies (this can take several minutes)...'
-    Update-M365DSCDependencies -Scope CurrentUser
     $module = Get-Module -ListAvailable -Name Microsoft365DSC | Sort-Object Version -Descending | Select-Object -First 1
-}
-elseif ($InstallPrerequisites) {
-    Import-Module Microsoft365DSC -Force
-    Write-Info 'Ensuring Microsoft365DSC dependencies are installed...'
-    Update-M365DSCDependencies -Scope CurrentUser
 }
 Import-Module Microsoft365DSC -Force
 Write-Ok "Microsoft365DSC $($module.Version)"
@@ -144,13 +146,22 @@ $outdated = @(Update-M365DSCDependencies -ValidateOnly)
 if ($outdated.Count -gt 0) {
     $outdatedNames = ($outdated | ForEach-Object { $_.ModuleName }) -join ', '
     if (-not $InstallPrerequisites) {
-        throw "These Microsoft365DSC dependencies are missing or at the wrong version: $outdatedNames. Re-run in a NEW PowerShell window with -InstallPrerequisites, or run: Update-M365DSCDependencies -Scope CurrentUser"
+        throw "These Microsoft365DSC dependencies are missing or at the wrong version: $outdatedNames. Re-run with -InstallPrerequisites to install them."
     }
-    Write-Info "Updating dependencies: $outdatedNames"
-    Update-M365DSCDependencies -Scope CurrentUser
+    foreach ($dependency in $outdated) {
+        Write-Info "Installing $($dependency.ModuleName) $($dependency.RequiredVersion)..."
+        try {
+            Install-RequiredModuleVersion -Name $dependency.ModuleName -Version $dependency.RequiredVersion
+            Write-Ok "$($dependency.ModuleName) $($dependency.RequiredVersion)"
+        }
+        catch {
+            Write-Warn "$($dependency.ModuleName) $($dependency.RequiredVersion) failed: $($_.Exception.Message)"
+        }
+    }
     $outdated = @(Update-M365DSCDependencies -ValidateOnly)
     if ($outdated.Count -gt 0) {
-        throw "Dependencies still not at the required version: $(($outdated | ForEach-Object { $_.ModuleName }) -join ', '). Close ALL PowerShell windows, open a new one and re-run with -InstallPrerequisites."
+        $details = ($outdated | ForEach-Object { "$($_.ModuleName) $($_.RequiredVersion)" }) -join ', '
+        throw "Dependencies still not at the required version: $details. See the WARN lines above for the install error of each module."
     }
 }
 Write-Ok 'All dependencies are at the required versions'
