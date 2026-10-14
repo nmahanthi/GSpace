@@ -223,9 +223,14 @@ $thumbprint = $cert.Thumbprint
 
 #region Tenant / sign-in validation
 Write-Step 'Validating sign-in and resolving tenant domain'
+$graphAuthVersion = ((Import-PowerShellDataFile -Path (Join-Path -Path $module.ModuleBase -ChildPath 'Dependencies\Manifest.psd1')).Dependencies |
+    Where-Object { $_.ModuleName -eq 'Microsoft.Graph.Authentication' }).RequiredVersion
+if ($graphAuthVersion -and -not (Get-Module -Name Microsoft.Graph.Authentication)) {
+    Import-Module -Name Microsoft.Graph.Authentication -RequiredVersion $graphAuthVersion
+}
 try {
     Connect-MgGraph -ClientId $ClientId -TenantId $TenantId -CertificateThumbprint $thumbprint -NoWelcome | Out-Null
-    $org = Get-MgOrganization | Select-Object -First 1
+    $org = (Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization?$select=displayName,verifiedDomains' -OutputType PSObject).value | Select-Object -First 1
 }
 catch {
     throw "Sign-in failed for app $ClientId in tenant $TenantId. Confirm the certificate (thumbprint $thumbprint) is uploaded to the app registration and admin consent is granted. Details: $($_.Exception.Message)"
