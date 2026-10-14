@@ -139,6 +139,22 @@ elseif ($InstallPrerequisites) {
 Import-Module Microsoft365DSC -Force
 Write-Ok "Microsoft365DSC $($module.Version)"
 
+Write-Step 'Validating Microsoft365DSC dependencies'
+$outdated = @(Update-M365DSCDependencies -ValidateOnly)
+if ($outdated.Count -gt 0) {
+    $outdatedNames = ($outdated | ForEach-Object { $_.ModuleName }) -join ', '
+    if (-not $InstallPrerequisites) {
+        throw "These Microsoft365DSC dependencies are missing or at the wrong version: $outdatedNames. Re-run in a NEW PowerShell window with -InstallPrerequisites, or run: Update-M365DSCDependencies -Scope CurrentUser"
+    }
+    Write-Info "Updating dependencies: $outdatedNames"
+    Update-M365DSCDependencies -Scope CurrentUser
+    $outdated = @(Update-M365DSCDependencies -ValidateOnly)
+    if ($outdated.Count -gt 0) {
+        throw "Dependencies still not at the required version: $(($outdated | ForEach-Object { $_.ModuleName }) -join ', '). Close ALL PowerShell windows, open a new one and re-run with -InstallPrerequisites."
+    }
+}
+Write-Ok 'All dependencies are at the required versions'
+
 $supportedWorkloads = (Get-Command Export-M365DSCConfiguration).Parameters['Workloads'].Attributes |
     Where-Object { $_ -is [System.Management.Automation.ValidateSetAttribute] } |
     Select-Object -ExpandProperty ValidValues
