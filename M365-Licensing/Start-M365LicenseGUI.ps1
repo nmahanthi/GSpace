@@ -27,7 +27,7 @@ $form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.
 # ---- Inputs ----------------------------------------------------------------
 $form.Controls.Add((New-Label 'Tenant ID' 20 20))
 $txtTenant = New-Box 140 20 360; $form.Controls.Add($txtTenant)
-$form.Controls.Add((New-Label '(GUID or contoso.onmicrosoft.com)' 510 20 300)).ForeColor = [Drawing.Color]::Gray
+$lblHint = New-Label '(GUID or contoso.onmicrosoft.com)' 510 20 300; $lblHint.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblHint)
 
 $form.Controls.Add((New-Label 'Customer name' 20 54))
 $txtName = New-Box 140 54 360; $form.Controls.Add($txtName)
@@ -77,7 +77,7 @@ $lblNote = New-Label '' 20 360 880; $lblNote.ForeColor = [Drawing.Color]::Gray; 
 $txtLog = [Windows.Forms.TextBox]::new(); $txtLog.Multiline = $true; $txtLog.ReadOnly = $true; $txtLog.ScrollBars = 'Vertical'
 $txtLog.Location = [Drawing.Point]::new(20, 390); $txtLog.Size = [Drawing.Size]::new(880, 170); $txtLog.Font = [Drawing.Font]::new('Consolas', 9); $txtLog.Anchor = 'Top,Left,Right'
 $form.Controls.Add($txtLog)
-$form.Controls.Add((New-Label 'Generated files (double-click to open)' 20 570 400)).Font = [Drawing.Font]::new('Segoe UI', 9.5, [Drawing.FontStyle]::Bold)
+$lblFiles = New-Label 'Generated files (double-click to open)' 20 570 400; $lblFiles.Font = [Drawing.Font]::new('Segoe UI', 9.5, [Drawing.FontStyle]::Bold); $form.Controls.Add($lblFiles)
 $lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Location = [Drawing.Point]::new(20, 596); $lstFiles.Size = [Drawing.Size]::new(880, 110); $lstFiles.Anchor = 'Top,Left,Right,Bottom'
 $form.Controls.Add($lstFiles)
 
