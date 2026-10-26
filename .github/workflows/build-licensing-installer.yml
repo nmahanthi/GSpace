@@ -1,0 +1,46 @@
+name: Build licence review installer
+on:
+  push:
+    tags: ['licence-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number, e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Work out version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'push') { '${{ github.ref_name }}' -replace '^licence-v','' } else { '${{ inputs.version }}' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Stage customer package
+        shell: pwsh
+        working-directory: M365-Licensing/Package
+        run: ./Build-CustomerPackage.ps1 -Version ${{ steps.v.outputs.version }}
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build installer
+        shell: pwsh
+        working-directory: M365-Licensing/Package
+        run: '& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.v.outputs.version }}" installer.iss'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M365LicenseReview-${{ steps.v.outputs.version }}
+          path: |
+            M365-Licensing/Package/dist/*.exe
+            M365-Licensing/Package/dist/*.zip
+      - name: Attach to GitHub release (tag builds only)
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName --title "Licence Review ${{ steps.v.outputs.version }}" --notes "Customer edition installer and ZIP."

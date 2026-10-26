@@ -13,13 +13,15 @@
     Requires: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
     Graph permissions (read-only): User.Read.All, Organization.Read.All, AuditLog.Read.All, Reports.Read.All
       (application permissions for unattended use; delegated scopes are requested when signing in interactively).
-    Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PriceUSD,PriceINR; per user per month).
+    Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PriceUSD,PriceINR,...; per user per month).
+    To support another currency add a Price<CODE> column (e.g. PriceGBP). The currency is picked from the tenant's country
+    unless -Currencies is given; a country whose currency has no price column falls back to USD with a warning.
     The shipped prices are PLACEHOLDERS: replace them with the customer's real contract prices.
     Sign-in data (signInActivity) needs Entra ID P1 or higher; if unavailable, inactive-user checks are skipped.
     Usage reports show real user names only if the tenant setting "Display concealed user, group and site names" is off;
     otherwise email-only detection is skipped.
 .EXAMPLE
-    ./Get-M365LicenseSavings.ps1 -TenantId <guid> -Open            # USD and INR reports
+    ./Get-M365LicenseSavings.ps1 -TenantId <guid> -Open            # currency detected from the tenant's country
     ./Get-M365LicenseSavings.ps1 -TenantId <guid> -Currencies INR  # INR only
     ./Get-M365LicenseSavings.ps1 -TenantId <guid> -ClientId <guid> -SecretEnvVar M365_SECRET_CONTOSO
 #>
@@ -30,12 +32,13 @@ param(
     [string]$ClientId,
     [string]$SecretEnvVar,
     [string]$PricesCsv = (Join-Path $PSScriptRoot 'prices.csv'),
-    [ValidateSet('USD','INR')] [string[]]$Currencies = @('USD','INR'),   # one report per currency
+    [string[]]$Currencies,   # e.g. USD,INR,GBP. Blank = detect from the tenant's country. One report per currency.
     [int]$InactiveDays = 90,
     [string]$EmailOnlyTargetSku = 'EXCHANGESTANDARD',
     [string]$PartnerTermsCsv = (Join-Path $PSScriptRoot 'partner-terms.csv'),
     [switch]$SkipPartnerReport,
     [string]$OutputDir = (Join-Path $PSScriptRoot 'output'),
+    [switch]$DeviceCode,
     [switch]$Open
 )
 $ErrorActionPreference = 'Stop'
@@ -58,7 +61,10 @@ if ($ClientId -and $SecretEnvVar -and $TenantId) {
     Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $cred -NoWelcome
 } else {
     $scopes = 'User.Read.All','Organization.Read.All','AuditLog.Read.All','Reports.Read.All'
-    if ($TenantId) { Connect-MgGraph -TenantId $TenantId -Scopes $scopes -NoWelcome } else { Connect-MgGraph -Scopes $scopes -NoWelcome }
+    $cp = @{ Scopes = $scopes; NoWelcome = $true }
+    if ($TenantId) { $cp.TenantId = $TenantId }
+    if ($DeviceCode) { $cp.UseDeviceAuthentication = $true }   # headless sign-in: shows a code to enter at microsoft.com/devicelogin
+    Connect-MgGraph @cp
 }
 
 if (-not $CustomerName) {
@@ -66,6 +72,26 @@ if (-not $CustomerName) {
     if (-not $CustomerName) { $CustomerName = if ($TenantId) { $TenantId } else { 'Tenant' } }
 }
 $safe = ($CustomerName -replace '[^\w\-]', '_')
+
+# ---- Currency: detect from the tenant's country unless given ---------------
+$currencyByCountry = @{ IN='INR'; US='USD'; GB='GBP'; AU='AUD'; CA='CAD'; NZ='NZD'; SG='SGD'; AE='AED'; JP='JPY'; CH='CHF'; ZA='ZAR'
+    AT='EUR'; BE='EUR'; CY='EUR'; DE='EUR'; EE='EUR'; ES='EUR'; FI='EUR'; FR='EUR'; GR='EUR'; HR='EUR'; IE='EUR'; IT='EUR'; LT='EUR'; LU='EUR'; LV='EUR'; MT='EUR'; NL='EUR'; PT='EUR'; SI='EUR'; SK='EUR' }
+$symbols = @{ USD='$'; INR=[string][char]0x20B9; GBP=[string][char]0xA3; EUR=[string][char]0x20AC; AUD='A$'; CAD='C$'; NZD='NZ$'; SGD='S$'; AED='AED '; JPY=[string][char]0xA5; CHF='CHF '; ZAR='R' }
+$priceColumns = @((Import-Csv $PricesCsv | Select-Object -First 1).PSObject.Properties.Name | Where-Object { $_ -like 'Price*' -and $_.Length -eq 8 } | ForEach-Object { $_.Substring(5) })
+$regionNote = $null
+if (-not $Currencies) {
+    $cc = try { (Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/organization').value[0].countryLetterCode } catch { $null }
+    $want = if ($cc -and $currencyByCountry.ContainsKey($cc)) { $currencyByCountry[$cc] } else { 'USD' }
+    if ($want -notin $priceColumns) {
+        $regionNote = "Tenant country is '$cc' ($want), but prices.csv has no Price$want column: showing USD. Add a Price$want column to report in $want."
+        $want = 'USD'
+    } else { $regionNote = "Currency $want chosen from tenant country '$cc'. Use -Currencies to override." }
+    $Currencies = @($want)
+    Write-Output $regionNote
+}
+foreach ($c in $Currencies) {
+    if ($c -notin $priceColumns) { throw "Currency '$c' has no Price$c column in prices.csv. Available: $($priceColumns -join ', ')." }
+}
 
 function Get-GraphAll([string]$Uri) {
     $items = @()
@@ -117,8 +143,9 @@ try {
 $baseWarnings = @($warnings)
 $allOutputs = @()
 foreach ($Currency in $Currencies) {
-$sym = if ($Currency -eq 'INR') { '₹' } else { '$' }
+$sym = if ($symbols.ContainsKey($Currency)) { $symbols[$Currency] } else { "$Currency " }
 $warnings = @($baseWarnings)
+if ($regionNote -and $regionNote -like 'Tenant country*') { $warnings += $regionNote }
 $price = @{}; $friendly = @{}
 foreach ($p in Import-Csv $PricesCsv) {
     $price[$p.SkuPartNumber] = [double]$p."Price$Currency"
@@ -327,7 +354,8 @@ $warnHtml
 $htmlPath = Join-Path $OutputDir "$safe-licensing-$Currency.html"
 $html | Set-Content $htmlPath -Encoding UTF8
 # ---- Partner profit view (INTERNAL - do not send to the customer) ----------
-if (-not $SkipPartnerReport) {
+# The partner view only runs when partner-terms.csv exists, so the customer package (which omits it) never produces it.
+if (-not $SkipPartnerReport -and (Test-Path $PartnerTermsCsv)) {
     $t = $null
     if (Test-Path $PartnerTermsCsv) { $t = Import-Csv $PartnerTermsCsv | Where-Object Currency -eq $Currency | Select-Object -First 1 }
     function Get-Term([string]$Name, [double]$Default) {
