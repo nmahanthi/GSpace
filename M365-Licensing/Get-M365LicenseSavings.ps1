@@ -94,11 +94,12 @@ foreach ($c in $Currencies) {
     if ($c -notin $priceColumns) { throw "Currency '$c' has no Price$c column in prices.csv. Available: $($priceColumns -join ', ')." }
 }
 
-function Get-GraphAll([string]$Uri) {
-    $items = @()
+function Get-GraphAll([string]$Uri, [string]$Label) {
+    $items = [Collections.Generic.List[object]]::new()
     while ($Uri) {
         $r = Invoke-MgGraphRequest -Method GET -Uri $Uri -Headers @{ ConsistencyLevel = 'eventual' }
-        $items += $r.value
+        if ($r.value) { $items.AddRange([object[]]@($r.value)) }
+        if ($Label) { Write-Verbose "$Label read so far: $($items.Count)" }
         $Uri = $r.'@odata.nextLink'
     }
     $items
@@ -115,19 +116,20 @@ foreach ($s in $skus) { $planSets[$s.skuId] = [Collections.Generic.HashSet[strin
 
 $baseWarnings = @()
 $warnings = $baseWarnings
-Write-Verbose 'Reading users'
+Write-Verbose 'Reading users (large tenants can take several minutes; sign-in data is read 120 users at a time)'
 $sel = 'id,displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime'
 $haveSignIn = $true
 try {
-    $users = @(Get-GraphAll "https://graph.microsoft.com/v1.0/users?`$select=$sel,signInActivity&`$top=120")
+    $users = @(Get-GraphAll "https://graph.microsoft.com/v1.0/users?`$select=$sel,signInActivity&`$top=120" 'Users')
 } catch {
     $haveSignIn = $false
     $warnings += 'Sign-in activity unavailable (needs Entra ID P1+ and AuditLog.Read.All): inactive-user check skipped.'
-    $users = @(Get-GraphAll "https://graph.microsoft.com/v1.0/users?`$select=$sel&`$top=999")
+    $users = @(Get-GraphAll "https://graph.microsoft.com/v1.0/users?`$select=$sel&`$top=999" 'Users')
 }
 $licensedUsers = @($users | Where-Object { @($_.assignedLicenses).Count -gt 0 })
 
 # Usage report (for email-only detection)
+Write-Verbose "Users read: $($users.Count) ($($licensedUsers.Count) licensed). Reading the 90-day usage report"
 $usage = @{}
 try {
     $tmp = [IO.Path]::GetTempFileName()
@@ -142,6 +144,7 @@ try {
 } catch { $warnings += "Usage report unavailable: $($_.Exception.Message)" }
 
 $baseWarnings = @($warnings)
+Write-Verbose 'Analysing licences and building reports'
 $allOutputs = @()
 foreach ($Currency in $Currencies) {
 $sym = if ($symbols.ContainsKey($Currency)) { $symbols[$Currency] } else { "$Currency " }

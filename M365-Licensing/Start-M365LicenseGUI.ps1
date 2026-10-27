@@ -63,8 +63,10 @@ $btnOut = New-Button 'Browse' 670 236 80; $btnOpenOut = New-Button 'Open' 760 23
 $form.Controls.AddRange(@($btnOut, $btnOpenOut))
 
 $btnRun = New-Button 'Run analysis' 140 276 160; $btnRun.Height = 34; $btnRun.BackColor = [Drawing.Color]::FromArgb(10, 102, 194); $btnRun.ForeColor = [Drawing.Color]::White; $btnRun.FlatStyle = 'Flat'
-$lblStatus = New-Label 'Ready.' 320 284 560
-$form.Controls.AddRange(@($btnRun, $lblStatus))
+$btnStop = New-Button 'Stop' 310 276 80; $btnStop.Enabled = $false
+$btnStop.Add_Click({ $script:cancelled = $true; if ($script:ps) { try { $script:ps.Stop() } catch { } } })
+$lblStatus = New-Label 'Ready.' 400 284 480
+$form.Controls.AddRange(@($btnRun, $btnStop, $lblStatus))
 
 # ---- Result cards ----------------------------------------------------------
 $cards = @{}
@@ -190,13 +192,31 @@ $btnRun.Add_Click({
     $tabFind.Text = 'Findings'; $tabChk.Text = 'Checks'; $lblNote.ForeColor = [Drawing.Color]::Gray
     $start = Get-Date; $failed = $false
     Set-Busy $true; $lblStatus.Text = 'Running. A Microsoft sign-in window may open behind this one.'
+    # Run in a background runspace so the window stays responsive (Graph calls can take minutes)
+    $script:cancelled = $false
+    $ps = [PowerShell]::Create()
+    [void]$ps.AddScript({ param($sp, $pr) & $sp @pr }).AddArgument($scriptPath).AddArgument($params)
+    $script:ps = $ps
+    $btnStop.Enabled = $true
+    $tick = Get-Date
     try {
-        & $scriptPath @params *>&1 | ForEach-Object {
-            $prefix = switch ($_.GetType().Name) { 'WarningRecord' { 'WARNING: ' } 'ErrorRecord' { 'ERROR: ' } default { '' } }
-            Add-LogLine ($prefix + $_.ToString())
+        $async = $ps.BeginInvoke()
+        while (-not $async.IsCompleted) {
+            foreach ($m in $ps.Streams.Verbose.ReadAll())     { Add-LogLine ($m.Message) }
+            foreach ($m in $ps.Streams.Warning.ReadAll())     { Add-LogLine ('WARNING: ' + $m.Message) }
+            foreach ($m in $ps.Streams.Information.ReadAll()) { Add-LogLine ([string]$m.MessageData) }
+            foreach ($m in $ps.Streams.Error.ReadAll())       { Add-LogLine ('ERROR: ' + $m.ToString()) }
+            $lblStatus.Text = 'Running ({0:mm\:ss}). A Microsoft sign-in window may open behind this one.' -f ((Get-Date) - $start)
+            [Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 150
         }
+        foreach ($m in $ps.Streams.Verbose.ReadAll())     { Add-LogLine ($m.Message) }
+        foreach ($m in $ps.Streams.Warning.ReadAll())     { Add-LogLine ('WARNING: ' + $m.Message) }
+        foreach ($m in $ps.Streams.Information.ReadAll()) { Add-LogLine ([string]$m.MessageData) }
+        foreach ($m in $ps.Streams.Error.ReadAll())       { Add-LogLine ('ERROR: ' + $m.ToString()) }
+        if ($script:cancelled) { $failed = $true; Add-LogLine 'Stopped by user.' }
+        else { try { [void]$ps.EndInvoke($async) } catch { $failed = $true; Add-LogLine ('ERROR: ' + $_.Exception.Message) } }
     } catch { $failed = $true; Add-LogLine ('ERROR: ' + $_.Exception.Message) }
-    finally { try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch { }; Set-Busy $false }
+    finally { $btnStop.Enabled = $false; $ps.Dispose(); $script:ps = $null; try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch { }; Set-Busy $false }
 
     $out = $txtOut.Text
     $files = @(); if (Test-Path $out) { $files = @(Get-ChildItem $out -File | Where-Object { $_.LastWriteTime -ge $start.AddSeconds(-2) } | Sort-Object Name) }
