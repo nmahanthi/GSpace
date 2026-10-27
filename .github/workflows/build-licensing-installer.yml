@@ -83,4 +83,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName --title "M365TenantTidy ${{ steps.v.outputs.version }}" --notes "Customer edition installer and ZIP. Silent install (Microsoft Store): M365TenantTidy-Setup-${{ steps.v.outputs.version }}.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $notes = "Silent install: M365TenantTidy-Setup-$v.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+          $files = (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName
+          gh release create "${{ github.ref_name }}" $files --title "M365TenantTidy $v" --notes $notes

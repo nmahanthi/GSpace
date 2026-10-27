@@ -1,5 +1,5 @@
 ; Inno Setup script for the customer edition. Build with: ISCC /DAppVersion=1.0.0 installer.iss
-; Run Build-CustomerPackage.ps1 first so ..\dist\M365TenantTidy exists.
+; Run Build-CustomerPackage.ps1 first so dist\M365TenantTidy exists.
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
@@ -20,7 +20,7 @@ DefaultDirName={localappdata}\M365TenantTidy
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputDir=..\dist
+OutputDir=dist
 OutputBaseFilename=M365TenantTidy-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
@@ -33,7 +33,7 @@ SignedUninstaller=yes
 #endif
 
 [Files]
-Source: "..\dist\M365TenantTidy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "dist\M365TenantTidy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
