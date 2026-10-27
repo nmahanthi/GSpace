@@ -91,15 +91,16 @@ function New-Grid([string[]]$cols) {
 }
 function New-Tab($title, $control) { $t = [Windows.Forms.TabPage]::new(); $t.Text = $title; $t.Controls.Add($control); $t }
 $gridSku  = New-Grid @('Licence', 'Type', 'Purchased', 'Assigned', 'Unassigned', 'Price / user / mo', 'Price source', 'Monthly spend', 'Unassigned cost / mo')
+$gridProg = New-Grid @('Measure', 'Last run', 'Now', 'Change')
 $gridCat  = New-Grid @('Category', 'Users', 'Saving / month')
 $gridFind = New-Grid @('Category', 'User', 'Licences', 'Saving / month', 'Confidence', 'Recommended action')
 $txtChecks = [Windows.Forms.TextBox]::new(); $txtChecks.Multiline = $true; $txtChecks.ReadOnly = $true; $txtChecks.ScrollBars = 'Vertical'; $txtChecks.Dock = 'Fill'; $txtChecks.BackColor = [Drawing.Color]::White
 $txtLog = [Windows.Forms.TextBox]::new(); $txtLog.Multiline = $true; $txtLog.ReadOnly = $true; $txtLog.ScrollBars = 'Vertical'; $txtLog.Dock = 'Fill'; $txtLog.Font = [Drawing.Font]::new('Consolas', 9)
 $lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Dock = 'Fill'
 $tabs = [Windows.Forms.TabControl]::new(); $tabs.Location = [Drawing.Point]::new(20, 444); $tabs.Size = [Drawing.Size]::new(880, 290); $tabs.Anchor = 'Top,Left,Right,Bottom'
-$tabLic = New-Tab 'Licences' $gridSku; $tabCat = New-Tab 'By category' $gridCat; $tabFind = New-Tab 'Findings' $gridFind
+$tabLic = New-Tab 'Licences' $gridSku; $tabProg = New-Tab 'Progress' $gridProg; $tabCat = New-Tab 'By category' $gridCat; $tabFind = New-Tab 'Findings' $gridFind
 $tabChk = New-Tab 'Checks' $txtChecks; $tabLog = New-Tab 'Log' $txtLog; $tabFiles = New-Tab 'Files (double-click to open)' $lstFiles
-$tabs.TabPages.AddRange(@($tabLic, $tabCat, $tabFind, $tabChk, $tabLog, $tabFiles))
+$tabs.TabPages.AddRange(@($tabLic, $tabProg, $tabCat, $tabFind, $tabChk, $tabLog, $tabFiles))
 $form.Controls.Add($tabs)
 $script:jsonByCur = @{}
 
@@ -129,7 +130,7 @@ function Show-Results([string]$cur) {
     $cards.confirmed.Text = Format-Amount $r.ConfirmedMonthlyWaste $cur
     $cards.review.Text = Format-Amount $r.ReviewMonthly $cur
     $cards.annual.Text = Format-Amount $r.ConservativeAnnualSaving $cur
-    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear()
+    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear(); $gridProg.Rows.Clear()
     $skus = @($r.Skus); $contract = 0; $trial = 0; $unpriced = 0
     foreach ($k in ($skus | Sort-Object { [double]$_.MonthlySpend } -Descending)) {
         $isTrial = ($k.Type -eq 'Trial/Free'); $hasPrice = ($null -ne $k.Price)
@@ -152,15 +153,37 @@ function Show-Results([string]$cur) {
         }
     }
     $tabFind.Text = "Findings ($nFind)"
-    $w = @($r.Warnings)
+    # Progress since the previous run for this customer
+    $h = $r.History; $progNote = ''
+    if ($h) {
+        $mm = @(@('Monthly licence spend', $h.SpendBefore, $h.SpendNow), @('Confirmed waste / month', $h.ConfirmedBefore, $h.ConfirmedNow),
+                @('To review / month', $h.ReviewBefore, $h.ReviewNow), @('Unassigned seats cost / month', $h.UnassignedBefore, $h.UnassignedNow))
+        foreach ($m in $mm) {
+            $d = [double]$m[2] - [double]$m[1]; $sign = if ($d -gt 0) { '+' } else { '' }
+            $i = $gridProg.Rows.Add([object[]]@($m[0], (Format-Amount ([double]$m[1]) $cur), (Format-Amount ([double]$m[2]) $cur), ($sign + (Format-Amount $d $cur))))
+            if ([math]::Abs($d) -ge 0.5) { $gridProg.Rows[$i].Cells[3].Style.ForeColor = $(if ($d -lt 0) { [Drawing.Color]::FromArgb(30, 158, 90) } else { [Drawing.Color]::FromArgb(192, 57, 43) }) }
+        }
+        [void]$gridProg.Rows.Add([object[]]@('Seats removed since last run', '', '', "$($h.SeatsRemoved) (worth $(Format-Amount ([double]$h.SeatsRemovedMonthly) $cur)/month)"))
+        [void]$gridProg.Rows.Add([object[]]@('Earlier findings no longer applying', '', '', "$($h.ResolvedCount) (worth $(Format-Amount ([double]$h.ResolvedMonthly) $cur)/month)"))
+        [void]$gridProg.Rows.Add([object[]]@('New findings', '', '', "$($h.NewCount) (worth $(Format-Amount ([double]$h.NewMonthly) $cur)/month)"))
+        if ($h.PriceChanged) { [void]$gridProg.Rows.Add([object[]]@('Note', '', '', 'Prices changed since the last run, so the spend change includes price changes.')) }
+        $tabProg.Text = "Progress (vs $($h.PreviousRun))"
+        if ($h.SeatsRemoved -gt 0) { $progNote = "Since $($h.PreviousRun): $($h.SeatsRemoved) seat(s) removed, about $(Format-Amount ([double]$h.SeatsRemovedMonthly) $cur)/month saved." }
+    } else {
+        [void]$gridProg.Rows.Add([object[]]@('First run for this customer', '', '', 'Baseline saved. The next run will show what changed.'))
+        $tabProg.Text = 'Progress (baseline saved)'
+    }
+    $w = @($r.Warnings | Sort-Object { if ($_ -like 'FIX*') { 0 } else { 1 } })
     $txtChecks.Text = if ($w.Count) { ($w | ForEach-Object { '- ' + $_ }) -join ([Environment]::NewLine + [Environment]::NewLine) } else { 'No check warnings.' }
     $tabChk.Text = "Checks ($($w.Count))"
     $parts = @("Figures in $cur.", "Annual saving if every review item is accepted: $(Format-Amount $r.AnnualSaving $cur).")
     $parts += $(if ($contract) { "$contract licence price(s) from the customer's contract." } else { 'Using list prices (no contract prices applied).' })
     if ($trial) { $parts += "$trial free/trial product(s) not counted as spend." }
     if ($unpriced) { $parts += "$unpriced paid licence(s) have no price (yellow rows): fill them in under Contract prices." }
+    if ($r.UsageNamesConcealed) { $parts += 'User names are hidden in usage reports, so the email-only check was skipped: see the first item under Checks for the fix.' }
+    if ($progNote) { $parts += $progNote }
     $lblNote.Text = $parts -join ' '
-    $lblNote.ForeColor = if ($unpriced -or $w.Count) { [Drawing.Color]::FromArgb(176, 112, 0) } else { [Drawing.Color]::Gray }
+    $lblNote.ForeColor = if ($unpriced -or $w.Count -or $r.UsageNamesConcealed) { [Drawing.Color]::FromArgb(176, 112, 0) } else { [Drawing.Color]::Gray }
 }
 $cmbView.Add_SelectedIndexChanged({ if ($cmbView.SelectedItem) { Show-Results ([string]$cmbView.SelectedItem) } })
 $lstFiles.Add_DoubleClick({ if ($lstFiles.SelectedItem) { $f = Join-Path $txtOut.Text $lstFiles.SelectedItem; if (Test-Path $f) { Invoke-Item $f } } })
@@ -188,8 +211,8 @@ $btnRun.Add_Click({
     if ($chkSkip.Checked) { $params.SkipPartnerReport = $true }
 
     $txtLog.Clear(); $lstFiles.Items.Clear(); foreach ($k in $cards.Keys) { $cards[$k].Text = '-' }; $lblNote.Text = ''
-    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear(); $txtChecks.Clear(); $cmbView.Visible = $false; $cmbView.Items.Clear(); $script:jsonByCur = @{}
-    $tabFind.Text = 'Findings'; $tabChk.Text = 'Checks'; $lblNote.ForeColor = [Drawing.Color]::Gray
+    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear(); $gridProg.Rows.Clear(); $txtChecks.Clear(); $cmbView.Visible = $false; $cmbView.Items.Clear(); $script:jsonByCur = @{}
+    $tabFind.Text = 'Findings'; $tabProg.Text = 'Progress'; $tabChk.Text = 'Checks'; $lblNote.ForeColor = [Drawing.Color]::Gray
     $start = Get-Date; $failed = $false
     Set-Busy $true; $lblStatus.Text = 'Running. A Microsoft sign-in window may open behind this one.'
     # Run in a background runspace so the window stays responsive (Graph calls can take minutes)

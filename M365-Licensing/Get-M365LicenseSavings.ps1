@@ -11,7 +11,7 @@
     Each user is counted under ONE category only (in the order above) so savings are not double counted.
 .NOTES
     Requires: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
-    Graph permissions (read-only): User.Read.All, Organization.Read.All, AuditLog.Read.All, Reports.Read.All
+    Graph permissions (read-only): User.Read.All, Organization.Read.All, AuditLog.Read.All, Reports.Read.All, ReportSettings.Read.All
       (application permissions for unattended use; delegated scopes are requested when signing in interactively).
     Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PriceUSD,PriceINR,...; per user per month).
     To support another currency add a Price<CODE> column (e.g. PriceGBP). The currency is picked from the tenant's country
@@ -39,6 +39,8 @@ param(
     [string]$PartnerTermsCsv = (Join-Path $PSScriptRoot 'partner-terms.csv'),
     [switch]$SkipPartnerReport,
     [string]$OutputDir = (Join-Path $PSScriptRoot 'output'),
+    [string]$HistoryDir,     # where run snapshots are kept; default <OutputDir>/history
+    [switch]$NoHistory,      # do not save a snapshot or compare with the previous run
     [switch]$DeviceCode,
     [switch]$Open
 )
@@ -61,7 +63,7 @@ if ($ClientId -and $SecretEnvVar -and $TenantId) {
     $cred = [pscredential]::new($ClientId, (ConvertTo-SecureString $secret -AsPlainText -Force))
     Connect-MgGraph -TenantId $TenantId -ClientSecretCredential $cred -NoWelcome
 } else {
-    $scopes = 'User.Read.All','Organization.Read.All','AuditLog.Read.All','Reports.Read.All'
+    $scopes = 'User.Read.All','Organization.Read.All','AuditLog.Read.All','Reports.Read.All','ReportSettings.Read.All'
     $cp = @{ Scopes = $scopes; NoWelcome = $true }
     if ($TenantId) { $cp.TenantId = $TenantId }
     if ($DeviceCode) { $cp.UseDeviceAuthentication = $true }   # headless sign-in: shows a code to enter at microsoft.com/devicelogin
@@ -128,6 +130,12 @@ try {
 }
 $licensedUsers = @($users | Where-Object { @($_.assignedLicenses).Count -gt 0 })
 
+# Is the tenant hiding user names in usage reports? (Microsoft 365 admin center > Settings > Org settings > Services > Reports)
+$concealedFix = "To switch it on: Microsoft 365 admin center > Settings > Org settings > Services > Reports > untick 'Display concealed user, group, and site names in all reports' > Save, then run this again (usage data can take a while to refresh)."
+$namesConcealed = $null
+try { $namesConcealed = [bool](Invoke-MgGraphRequest -Method GET -Uri 'https://graph.microsoft.com/v1.0/admin/reportSettings').displayConcealedNames }
+catch { Write-Verbose "Report privacy setting not readable (needs ReportSettings.Read.All): falling back to matching names." }
+
 # Usage report (for email-only detection)
 Write-Verbose "Users read: $($users.Count) ($($licensedUsers.Count) licensed). Reading the 90-day usage report"
 $usage = @{}
@@ -137,9 +145,12 @@ try {
     foreach ($r in Import-Csv $tmp) { if ($r.'Is Deleted' -ne 'True') { $usage[$r.'User Principal Name'.ToLower()] = $r } }
     Remove-Item $tmp -ErrorAction SilentlyContinue
     $matched = @($licensedUsers | Where-Object { $usage.ContainsKey($_.userPrincipalName.ToLower()) }).Count
-    if ($licensedUsers.Count -gt 0 -and $matched -lt ($licensedUsers.Count * 0.5)) {
-        $usage = @{}
-        $warnings += 'Usage report names look concealed: email-only detection skipped.'
+    $lowMatch = ($licensedUsers.Count -gt 0 -and $matched -lt ($licensedUsers.Count * 0.5))
+    if ($namesConcealed -eq $true -or ($null -eq $namesConcealed -and $lowMatch)) {
+        $usage = @{}; $namesConcealed = $true
+        $warnings += "FIX NEEDED: this tenant hides user names in usage reports, so the email-only check was skipped. $concealedFix"
+    } elseif ($lowMatch) {
+        $warnings += "CHECK: only $matched of $($licensedUsers.Count) licensed users appear in the usage report, so the email-only check may be incomplete."
     }
 } catch { $warnings += "Usage report unavailable: $($_.Exception.Message)" }
 
@@ -329,13 +340,82 @@ $tips += "<b>Remove unused add-ons</b> (Visio, Project, Power BI Pro, Defender/P
 $tips += "<b>Re-run quarterly.</b> This script is read-only and safe to schedule."
 
 # ---- Output files ----------------------------------------------------------
+# ---- Run history: compare with the previous run for this customer and currency ----
+$history = $null; $historyFirstRun = $false
+if (-not $NoHistory) {
+    try {
+        $histDir = if ($HistoryDir) { $HistoryDir } else { Join-Path $OutputDir 'history' }
+        New-Item -ItemType Directory -Force -Path $histDir | Out-Null
+        $prevFile = Get-ChildItem $histDir -Filter "$safe-$Currency-*.json" -File -ErrorAction SilentlyContinue | Sort-Object Name | Select-Object -Last 1
+        $keys = @($findings | ForEach-Object { [pscustomobject]@{ Key = "$($_.Category)|$($_.UPN)"; User = $_.User; Category = $_.Category; Confidence = $_.Confidence; MonthlySaving = [double]$_.MonthlySaving } })
+        $now = Get-Date
+        $snap = [ordered]@{
+            Version = 1; CustomerName = $CustomerName; Currency = $Currency; RunAt = $now.ToString('s')
+            MonthlySpend = $monthlySpend; ConfirmedMonthlyWaste = $conservativeMonthly; ReviewMonthly = $reviewMonthly; UnassignedSeatsWaste = $unassignedWaste
+            LicensedUsers = $licensedUsers.Count
+            Skus = @($skuRows | ForEach-Object { [pscustomobject]@{ Sku = $_.Sku; Purchased = $_.Purchased; Assigned = $_.Assigned; Price = $_.Price } })
+            Findings = $keys
+        }
+        $prev = $null
+        if ($prevFile) { try { $prev = Get-Content $prevFile.FullName -Raw | ConvertFrom-Json } catch { $warnings += "Run history: could not read $($prevFile.Name); comparison skipped." } }
+        if ($prev) {
+            $prevKeys = @{}; foreach ($k in @($prev.Findings)) { $prevKeys[$k.Key] = $k }
+            $curKeys = @{};  foreach ($k in $keys) { $curKeys[$k.Key] = $k }
+            $resolved = @(@($prev.Findings) | Where-Object { -not $curKeys.ContainsKey($_.Key) })
+            $newOnes  = @($keys | Where-Object { -not $prevKeys.ContainsKey($_.Key) })
+            $prevSku = @{}; foreach ($k in @($prev.Skus)) { $prevSku[$k.Sku] = $k }
+            $seatsRemoved = 0; $seatsRemovedMonthly = 0.0; $priceChanged = $false
+            foreach ($k in $skuRows) {
+                if (-not $prevSku.ContainsKey($k.Sku)) { continue }
+                $pk = $prevSku[$k.Sku]
+                if ($null -ne $k.Price -and $null -ne $pk.Price -and [math]::Abs([double]$pk.Price - [double]$k.Price) -gt 0.005) { $priceChanged = $true }
+                $d = [int]$pk.Purchased - [int]$k.Purchased
+                if ($d -gt 0 -and $null -ne $k.Price) { $seatsRemoved += $d; $seatsRemovedMonthly += $d * $k.Price }
+            }
+            $prevAt = [datetime]::Parse($prev.RunAt)
+            $history = [ordered]@{
+                PreviousRun = $prevAt.ToString('yyyy-MM-dd'); DaysSince = [int][math]::Floor(($now - $prevAt).TotalDays)
+                SpendBefore = [double]$prev.MonthlySpend; SpendNow = $monthlySpend
+                ConfirmedBefore = [double]$prev.ConfirmedMonthlyWaste; ConfirmedNow = $conservativeMonthly
+                ReviewBefore = [double]$prev.ReviewMonthly; ReviewNow = $reviewMonthly
+                UnassignedBefore = [double]$prev.UnassignedSeatsWaste; UnassignedNow = $unassignedWaste
+                ResolvedCount = $resolved.Count; ResolvedMonthly = [double](($resolved | Measure-Object MonthlySaving -Sum).Sum)
+                NewCount = $newOnes.Count; NewMonthly = [double](($newOnes | Measure-Object MonthlySaving -Sum).Sum)
+                SeatsRemoved = $seatsRemoved; SeatsRemovedMonthly = $seatsRemovedMonthly; PriceChanged = $priceChanged
+            }
+        } else { $historyFirstRun = $true }
+        $snapPath = Join-Path $histDir ("$safe-$Currency-{0:yyyyMMdd-HHmmss}.json" -f $now)
+        $snap | ConvertTo-Json -Depth 5 | Set-Content $snapPath -Encoding UTF8
+    } catch { $warnings += "Run history failed: $($_.Exception.Message)" }
+}
+$historyHtml = ''
+if ($history) {
+    $h = $history
+    $row = { param($label, $before, $after, $lowerIsBetter)
+        $d = $after - $before
+        $cls = if ([math]::Abs($d) -lt 0.5) { '' } elseif (($d -lt 0) -eq $lowerIsBetter) { 'good' } else { 'bad' }
+        $sign = if ($d -gt 0) { '+' } else { '' }
+        "<tr><td>$label</td><td>$(Format-Money $before)</td><td>$(Format-Money $after)</td><td class='$cls'>$sign$(Format-Money $d)</td></tr>" }
+    $rows = (& $row 'Monthly licence spend' $h.SpendBefore $h.SpendNow $true) + (& $row 'Confirmed waste / month' $h.ConfirmedBefore $h.ConfirmedNow $true) +
+            (& $row 'To review / month' $h.ReviewBefore $h.ReviewNow $true) + (& $row 'Unassigned seats cost / month' $h.UnassignedBefore $h.UnassignedNow $true)
+    $lines = @()
+    if ($h.SeatsRemoved -gt 0) { $lines += "<b>$($h.SeatsRemoved) seat(s) removed since the last run</b>, worth about $(Format-Money $h.SeatsRemovedMonthly)/month ($(Format-Money ($h.SeatsRemovedMonthly*12))/year) at current prices." }
+    if ($h.ResolvedCount -gt 0) { $lines += "$($h.ResolvedCount) earlier finding(s) no longer apply (worth $(Format-Money $h.ResolvedMonthly)/month when flagged)." }
+    if ($h.NewCount -gt 0) { $lines += "$($h.NewCount) new finding(s) since then (worth $(Format-Money $h.NewMonthly)/month)." }
+    if ($h.PriceChanged) { $lines += "<small>Prices changed since the last run (for example contract prices were added), so the spend change includes price changes.</small>" }
+    $linesHtml = ($lines | ForEach-Object { "<p>$_</p>" }) -join "`n"
+    $historyHtml = "<h2>Progress since the last run ($($h.PreviousRun), $($h.DaysSince) day(s) ago)</h2>`n<table><tr><th>Measure</th><th>Last run</th><th>Now</th><th>Change</th></tr>$rows</table>`n$linesHtml"
+} elseif ($historyFirstRun) {
+    $historyHtml = "<p><small>First run for this customer: a baseline has been saved. The next run will show what changed.</small></p>"
+}
+
 $csvPath = Join-Path $OutputDir "$safe-licensing-actions-$Currency.csv"
 $findings | Sort-Object MonthlySaving -Descending | Export-Csv $csvPath -NoTypeInformation -Encoding UTF8
 $jsonPath = Join-Path $OutputDir "$safe-licensing-$Currency.json"
 [ordered]@{
     CustomerName = $CustomerName; Currency = $Currency; GeneratedOn = (Get-Date -Format 'yyyy-MM-dd'); InactiveDays = $InactiveDays
     MonthlySpend = $monthlySpend; ConservativeAnnualSaving = $conservativeMonthly * 12; ConfirmedMonthlyWaste = $conservativeMonthly; ReviewMonthly = $reviewMonthly; MonthlyWaste = $totalMonthly; AnnualSaving = $totalMonthly * 12; WastePercent = $pct
-    UnassignedSeatsWaste = $unassignedWaste; Skus = $skuRows; Categories = $byCat; Warnings = @($warnings | Select-Object -Unique)
+    UnassignedSeatsWaste = $unassignedWaste; UsageNamesConcealed = $namesConcealed; History = $history; Skus = $skuRows; Categories = $byCat; Warnings = @($warnings | Select-Object -Unique)
 } | ConvertTo-Json -Depth 5 | Set-Content $jsonPath -Encoding UTF8
 
 $enc = { param($t) [Net.WebUtility]::HtmlEncode([string]$t) }
@@ -367,6 +447,7 @@ th{background:#f4f4f4;cursor:pointer}.bar{height:14px;background:#e67e22;border-
 <h1>Microsoft 365 licence savings - $(& $enc $CustomerName)</h1>
 <p>Generated $(Get-Date -Format 'yyyy-MM-dd'). Amounts are in $Currency. Prices come from prices.csv (PriceUSD / PriceINR) and are estimates: confirm against the customer's agreement.</p>
 $warnHtml
+$historyHtml
 <div class='cards'>
 <div class='card'>Current licence spend<div class='n'>$(Format-Money $monthlySpend)/mo</div>$(Format-Money ($monthlySpend*12))/yr</div>
 <div class='card'>Confirmed waste<div class='n bad'>$(Format-Money $conservativeMonthly)/mo</div>$confirmedPct% of spend: unassigned seats, disabled accounts, duplicate licences</div>
