@@ -21,8 +21,8 @@ function New-Box($x, $y, $w, $text = '') { $t = [Windows.Forms.TextBox]::new(); 
 function New-Button($text, $x, $y, $w = 90) { $b = [Windows.Forms.Button]::new(); $b.Text = $text; $b.Location = [Drawing.Point]::new($x, $y - 1); $b.Size = [Drawing.Size]::new($w, 26); $b }
 
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Microsoft 365 Licence Savings'; $form.Size = [Drawing.Size]::new(940, 790); $form.StartPosition = 'CenterScreen'
-$form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.Size]::new(940, 790)
+$form.Text = 'Microsoft 365 Licence Savings'; $form.Size = [Drawing.Size]::new(940, 800); $form.StartPosition = 'CenterScreen'
+$form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.Size]::new(940, 800)
 
 # ---- Inputs ----------------------------------------------------------------
 $form.Controls.Add((New-Label 'Tenant ID' 20 20))
@@ -76,15 +76,30 @@ foreach ($d in $defs) {
     $p.Controls.AddRange(@($cap, $val)); $form.Controls.Add($p); $cards[$d[0]] = $val
 }
 $cards.confirmed.ForeColor = [Drawing.Color]::FromArgb(192, 57, 43); $cards.annual.ForeColor = [Drawing.Color]::FromArgb(30, 158, 90)
-$lblNote = New-Label '' 20 414 880; $lblNote.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblNote)
+$lblNote = New-Label '' 20 414 770; $lblNote.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblNote)
+$cmbView = [Windows.Forms.ComboBox]::new(); $cmbView.DropDownStyle = 'DropDownList'; $cmbView.Location = [Drawing.Point]::new(800, 414); $cmbView.Size = [Drawing.Size]::new(100, 24); $cmbView.Anchor = 'Top,Right'; $cmbView.Visible = $false
+$form.Controls.Add($cmbView)
 
-# ---- Log and files ---------------------------------------------------------
-$txtLog = [Windows.Forms.TextBox]::new(); $txtLog.Multiline = $true; $txtLog.ReadOnly = $true; $txtLog.ScrollBars = 'Vertical'
-$txtLog.Location = [Drawing.Point]::new(20, 444); $txtLog.Size = [Drawing.Size]::new(880, 140); $txtLog.Font = [Drawing.Font]::new('Consolas', 9); $txtLog.Anchor = 'Top,Left,Right'
-$form.Controls.Add($txtLog)
-$lblFiles = New-Label 'Generated files (double-click to open)' 20 592 400; $lblFiles.Font = [Drawing.Font]::new('Segoe UI', 9.5, [Drawing.FontStyle]::Bold); $form.Controls.Add($lblFiles)
-$lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Location = [Drawing.Point]::new(20, 618); $lstFiles.Size = [Drawing.Size]::new(880, 100); $lstFiles.Anchor = 'Top,Left,Right,Bottom'
-$form.Controls.Add($lstFiles)
+# ---- Result tabs: licences, categories, findings, checks, log, files --------
+function New-Grid([string[]]$cols) {
+    $g = [Windows.Forms.DataGridView]::new(); $g.Dock = 'Fill'; $g.ReadOnly = $true; $g.AllowUserToAddRows = $false; $g.AllowUserToDeleteRows = $false
+    $g.RowHeadersVisible = $false; $g.SelectionMode = 'FullRowSelect'; $g.BackgroundColor = [Drawing.Color]::White; $g.AutoSizeColumnsMode = 'Fill'
+    foreach ($c in $cols) { [void]$g.Columns.Add($c, $c) }
+    $g
+}
+function New-Tab($title, $control) { $t = [Windows.Forms.TabPage]::new(); $t.Text = $title; $t.Controls.Add($control); $t }
+$gridSku  = New-Grid @('Licence', 'Type', 'Purchased', 'Assigned', 'Unassigned', 'Price / user / mo', 'Price source', 'Monthly spend', 'Unassigned cost / mo')
+$gridCat  = New-Grid @('Category', 'Users', 'Saving / month')
+$gridFind = New-Grid @('Category', 'User', 'Licences', 'Saving / month', 'Confidence', 'Recommended action')
+$txtChecks = [Windows.Forms.TextBox]::new(); $txtChecks.Multiline = $true; $txtChecks.ReadOnly = $true; $txtChecks.ScrollBars = 'Vertical'; $txtChecks.Dock = 'Fill'; $txtChecks.BackColor = [Drawing.Color]::White
+$txtLog = [Windows.Forms.TextBox]::new(); $txtLog.Multiline = $true; $txtLog.ReadOnly = $true; $txtLog.ScrollBars = 'Vertical'; $txtLog.Dock = 'Fill'; $txtLog.Font = [Drawing.Font]::new('Consolas', 9)
+$lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Dock = 'Fill'
+$tabs = [Windows.Forms.TabControl]::new(); $tabs.Location = [Drawing.Point]::new(20, 444); $tabs.Size = [Drawing.Size]::new(880, 290); $tabs.Anchor = 'Top,Left,Right,Bottom'
+$tabLic = New-Tab 'Licences' $gridSku; $tabCat = New-Tab 'By category' $gridCat; $tabFind = New-Tab 'Findings' $gridFind
+$tabChk = New-Tab 'Checks' $txtChecks; $tabLog = New-Tab 'Log' $txtLog; $tabFiles = New-Tab 'Files (double-click to open)' $lstFiles
+$tabs.TabPages.AddRange(@($tabLic, $tabCat, $tabFind, $tabChk, $tabLog, $tabFiles))
+$form.Controls.Add($tabs)
+$script:jsonByCur = @{}
 
 function Add-LogLine([string]$msg) { $txtLog.AppendText($msg + [Environment]::NewLine); [Windows.Forms.Application]::DoEvents() }
 function Set-Busy([bool]$busy) {
@@ -105,6 +120,47 @@ $btnEditContract.Add_Click({ if (Test-Path $txtContract.Text) { Invoke-Item $txt
 $btnEditPrices.Add_Click({ if (Test-Path $txtPrices.Text) { Invoke-Item $txtPrices.Text } else { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'Licence savings') | Out-Null } })
 $btnOut.Add_Click({ $d = [Windows.Forms.FolderBrowserDialog]::new(); $d.SelectedPath = $txtOut.Text; if ($d.ShowDialog() -eq 'OK') { $txtOut.Text = $d.SelectedPath } })
 $btnOpenOut.Add_Click({ if (Test-Path $txtOut.Text) { Invoke-Item $txtOut.Text } else { [Windows.Forms.MessageBox]::Show('Output folder does not exist yet. Run an analysis first.', 'Licence savings') | Out-Null } })
+function Show-Results([string]$cur) {
+    $jf = $script:jsonByCur[$cur]; if (-not $jf) { return }
+    $r = Get-Content $jf -Raw | ConvertFrom-Json
+    $cards.spend.Text = Format-Amount $r.MonthlySpend $cur
+    $cards.confirmed.Text = Format-Amount $r.ConfirmedMonthlyWaste $cur
+    $cards.review.Text = Format-Amount $r.ReviewMonthly $cur
+    $cards.annual.Text = Format-Amount $r.ConservativeAnnualSaving $cur
+    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear()
+    $skus = @($r.Skus); $contract = 0; $trial = 0; $unpriced = 0
+    foreach ($k in ($skus | Sort-Object { [double]$_.MonthlySpend } -Descending)) {
+        $isTrial = ($k.Type -eq 'Trial/Free'); $hasPrice = ($null -ne $k.Price)
+        if ($isTrial) { $trial++ } elseif (-not $hasPrice) { $unpriced++ }
+        if ($k.PriceSource -eq 'Contract') { $contract++ }
+        $price = if ($hasPrice) { Format-Amount ([double]$k.Price) $cur } else { 'n/a' }
+        $src = switch ($k.PriceSource) { 'Contract' { 'Customer contract' } 'List' { 'List price' } default { 'No price' } }
+        $idx = $gridSku.Rows.Add([object[]]@($k.Name, $(if ($isTrial) { 'Free / trial' } else { 'Paid' }), $k.Purchased, $k.Assigned, $k.Unassigned, $price, $src,
+            (Format-Amount ([double]$k.MonthlySpend) $cur), (Format-Amount ([double]$k.UnassignedWaste) $cur)))
+        if ($isTrial) { $gridSku.Rows[$idx].DefaultCellStyle.ForeColor = [Drawing.Color]::Gray }
+        elseif (-not $hasPrice) { $gridSku.Rows[$idx].DefaultCellStyle.BackColor = [Drawing.Color]::FromArgb(255, 243, 205) }
+        elseif ($k.PriceSource -eq 'Contract') { $gridSku.Rows[$idx].DefaultCellStyle.ForeColor = [Drawing.Color]::FromArgb(30, 158, 90) }
+    }
+    foreach ($c in @($r.Categories)) { [void]$gridCat.Rows.Add([object[]]@($c.Category, $c.Users, (Format-Amount ([double]$c.Monthly) $cur))) }
+    $af = Join-Path (Split-Path $jf) ([IO.Path]::GetFileName($jf) -replace '-licensing-([A-Z]{3})\.json$', '-licensing-actions-$1.csv')
+    $nFind = 0
+    if (Test-Path $af) {
+        foreach ($f in (Import-Csv $af | Select-Object -First 500)) {
+            [void]$gridFind.Rows.Add([object[]]@($f.Category, "$($f.User) ($($f.UPN))", $f.Licences, (Format-Amount ([double]$f.MonthlySaving) $cur), $f.Confidence, $f.Action)); $nFind++
+        }
+    }
+    $tabFind.Text = "Findings ($nFind)"
+    $w = @($r.Warnings)
+    $txtChecks.Text = if ($w.Count) { ($w | ForEach-Object { '- ' + $_ }) -join ([Environment]::NewLine + [Environment]::NewLine) } else { 'No check warnings.' }
+    $tabChk.Text = "Checks ($($w.Count))"
+    $parts = @("Figures in $cur.", "Annual saving if every review item is accepted: $(Format-Amount $r.AnnualSaving $cur).")
+    $parts += $(if ($contract) { "$contract licence price(s) from the customer's contract." } else { 'Using list prices (no contract prices applied).' })
+    if ($trial) { $parts += "$trial free/trial product(s) not counted as spend." }
+    if ($unpriced) { $parts += "$unpriced paid licence(s) have no price (yellow rows): fill them in under Contract prices." }
+    $lblNote.Text = $parts -join ' '
+    $lblNote.ForeColor = if ($unpriced -or $w.Count) { [Drawing.Color]::FromArgb(176, 112, 0) } else { [Drawing.Color]::Gray }
+}
+$cmbView.Add_SelectedIndexChanged({ if ($cmbView.SelectedItem) { Show-Results ([string]$cmbView.SelectedItem) } })
 $lstFiles.Add_DoubleClick({ if ($lstFiles.SelectedItem) { $f = Join-Path $txtOut.Text $lstFiles.SelectedItem; if (Test-Path $f) { Invoke-Item $f } } })
 
 $btnRun.Add_Click({
@@ -130,6 +186,8 @@ $btnRun.Add_Click({
     if ($chkSkip.Checked) { $params.SkipPartnerReport = $true }
 
     $txtLog.Clear(); $lstFiles.Items.Clear(); foreach ($k in $cards.Keys) { $cards[$k].Text = '-' }; $lblNote.Text = ''
+    $gridSku.Rows.Clear(); $gridCat.Rows.Clear(); $gridFind.Rows.Clear(); $txtChecks.Clear(); $cmbView.Visible = $false; $cmbView.Items.Clear(); $script:jsonByCur = @{}
+    $tabFind.Text = 'Findings'; $tabChk.Text = 'Checks'; $lblNote.ForeColor = [Drawing.Color]::Gray
     $start = Get-Date; $failed = $false
     Set-Busy $true; $lblStatus.Text = 'Running. A Microsoft sign-in window may open behind this one.'
     try {
@@ -144,17 +202,16 @@ $btnRun.Add_Click({
     $files = @(); if (Test-Path $out) { $files = @(Get-ChildItem $out -File | Where-Object { $_.LastWriteTime -ge $start.AddSeconds(-2) } | Sort-Object Name) }
     foreach ($f in $files) { $lstFiles.Items.Add($f.Name) | Out-Null }
 
-    $json = $files | Where-Object { $_.Name -match '-licensing-[A-Z]{3}\.json$' } | Select-Object -First 1
-    $cur = if ($json) { [regex]::Match($json.Name, '-licensing-([A-Z]{3})\.json$').Groups[1].Value } else { '' }
-    if ($json) {
-        $r = Get-Content $json.FullName -Raw | ConvertFrom-Json
-        $cards.spend.Text = Format-Amount $r.MonthlySpend $cur
-        $cards.confirmed.Text = Format-Amount $r.ConfirmedMonthlyWaste $cur
-        $cards.review.Text = Format-Amount $r.ReviewMonthly $cur
-        $cards.annual.Text = Format-Amount $r.ConservativeAnnualSaving $cur
-        $w = @($r.Warnings).Count
-        $lblNote.Text = "Figures shown in $cur. Annual saving if every review item is accepted: $(Format-Amount $r.AnnualSaving $cur). $w check warning(s) in the report: read them before sharing."
+    foreach ($f in ($files | Where-Object { $_.Name -match '-licensing-[A-Z]{3}\.json$' })) {
+        $script:jsonByCur[[regex]::Match($f.Name, '-licensing-([A-Z]{3})\.json$').Groups[1].Value] = $f.FullName
     }
+    $json = $script:jsonByCur.Count -gt 0
+    if ($json) {
+        foreach ($c in ($script:jsonByCur.Keys | Sort-Object)) { [void]$cmbView.Items.Add($c) }
+        $cmbView.Visible = ($cmbView.Items.Count -gt 1)
+        $cmbView.SelectedIndex = 0   # shows the first currency
+        $tabs.SelectedTab = $tabLic
+    } else { $tabs.SelectedTab = $tabLog }
     if ($failed -or -not $json) { $lblStatus.Text = 'Finished with errors. See the log.' } else { $lblStatus.Text = "Done. $($files.Count) file(s) written to $out" }
 })
 
