@@ -18,7 +18,7 @@ $stage = Join-Path $OutDir 'M365LicenseReview'
 if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$include = 'Get-M365LicenseSavings.ps1', 'Start-M365LicenseGUI.ps1', 'Start-M365LicenseGUI.cmd', 'prices.csv'
+$include = 'Get-M365LicenseSavings.ps1', 'Start-M365LicenseGUI.ps1', 'Start-M365LicenseGUI.cmd', 'prices.csv', 'customer-prices.csv'
 foreach ($f in $include) {
     $p = Join-Path $src $f
     if (-not (Test-Path $p)) { throw "Missing $p" }

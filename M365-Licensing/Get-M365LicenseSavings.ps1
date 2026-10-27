@@ -32,6 +32,7 @@ param(
     [string]$ClientId,
     [string]$SecretEnvVar,
     [string]$PricesCsv = (Join-Path $PSScriptRoot 'prices.csv'),
+    [string]$CustomerPricesCsv = (Join-Path $PSScriptRoot 'customer-prices.csv'),   # optional: the customer's own contract prices; overrides prices.csv per SKU
     [string[]]$Currencies,   # e.g. USD,INR,GBP. Blank = detect from the tenant's country. One report per currency.
     [int]$InactiveDays = 90,
     [string]$EmailOnlyTargetSku = 'EXCHANGESTANDARD',
@@ -151,6 +152,20 @@ foreach ($p in Import-Csv $PricesCsv) {
     $price[$p.SkuPartNumber] = [double]$p."Price$Currency"
     $friendly[$p.SkuPartNumber] = $p.FriendlyName
 }
+# Customer contract prices override list prices (only where a value is filled in for this currency)
+$priceSource = @{}
+$contractCount = 0
+if ($CustomerPricesCsv -and (Test-Path $CustomerPricesCsv)) {
+    foreach ($p in Import-Csv $CustomerPricesCsv) {
+        $v = "$($p."Price$Currency")".Trim()
+        if (-not $p.SkuPartNumber -or $v -eq '') { continue }
+        $d = 0.0
+        if (-not [double]::TryParse($v, [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d) -or $d -lt 0) { $warnings += "CHECK: ignored invalid contract price '$v' for $($p.SkuPartNumber)."; continue }
+        $price[$p.SkuPartNumber] = $d; $priceSource[$p.SkuPartNumber] = 'Contract'; $contractCount++
+        if (-not $friendly[$p.SkuPartNumber] -and $p.FriendlyName) { $friendly[$p.SkuPartNumber] = $p.FriendlyName }
+    }
+    if ($contractCount) { $warnings += "Note: $contractCount licence price(s) come from the customer's contract prices ($(Split-Path $CustomerPricesCsv -Leaf)); the rest are list prices." }
+}
 # ---- Per-SKU summary (spend and unassigned seats) -------------------------
 $skuRows = foreach ($s in $skus) {
     $name = $s.skuPartNumber
@@ -158,9 +173,14 @@ $skuRows = foreach ($s in $skus) {
     $assigned = [int]$s.consumedUnits
     $unassigned = [math]::Max(0, $enabled - $assigned)
     $pp = if ($price.ContainsKey($name)) { $price[$name] } else { $null }
-    if ($null -eq $pp) { $warnings += "No price for $name in prices.csv: excluded from cost figures." }
+    # Free and trial products cost nothing: group them apart so they do not look like waste or missing prices
+    $type = if ($name -match '(?i)viral|trial|exploratory|developer|_DEV$|DOMAINSTANDARD|RMSBASIC') { 'Trial/Free' } elseif ($null -ne $pp -and $pp -eq 0) { 'Trial/Free' } else { 'Paid' }
+    if ($type -eq 'Trial/Free' -and $null -eq $pp) { $pp = 0 }
+    $src = if ($priceSource[$name]) { $priceSource[$name] } elseif ($null -ne $pp) { 'List' } else { 'None' }
+    if ($null -eq $pp) { $warnings += "No price for ${name}: excluded from cost figures." }
     [pscustomobject]@{
         Sku = $name; Name = (Get-SkuName $name); Purchased = $enabled; Assigned = $assigned; Unassigned = $unassigned
+        Type = $type; PriceSource = $src
         Price = $pp; MonthlySpend = $(if ($pp) { $enabled * $pp } else { 0 })
         UnassignedWaste = $(if ($pp) { $unassigned * $pp } else { 0 })
     }
@@ -245,7 +265,14 @@ foreach ($r in $skuRows) {
 }
 # 2. SKUs with no price or zero price are excluded from money figures
 $noPrice = @($skuRows | Where-Object { $null -eq $_.Price } | ForEach-Object { $_.Sku })
-if ($noPrice.Count) { $warnings += "CHECK: $($noPrice.Count) licence(s) have no price in prices.csv and are NOT in any money figure: $($noPrice -join ', '). Add them to prices.csv." }
+if ($noPrice.Count) {
+    $warnings += "CHECK: $($noPrice.Count) paid licence(s) have no price and are NOT in any money figure: $($noPrice -join ', '). Add them to customer-prices.csv (a ready-to-fill file is in the output folder)."
+    $tplPath = Join-Path $OutputDir "$safe-prices-to-fill-$Currency.csv"
+    $skuRows | Where-Object { $null -eq $_.Price } | ForEach-Object {
+        $o = [ordered]@{ SkuPartNumber = $_.Sku; FriendlyName = $_.Name }; $o["Price$Currency"] = ''; $o.Purchased = $_.Purchased; [pscustomobject]$o
+    } | Export-Csv $tplPath -NoTypeInformation -Encoding UTF8
+}
+$trialRows = @($skuRows | Where-Object { $_.Type -eq 'Trial/Free' })
 # 3. Trial, suspended or warning-state subscriptions
 foreach ($s2 in $skus) {
     $susp = [int]$s2.prepaidUnits.suspended; $warn2 = [int]$s2.prepaidUnits.warning
@@ -309,9 +336,11 @@ $jsonPath = Join-Path $OutputDir "$safe-licensing-$Currency.json"
 } | ConvertTo-Json -Depth 5 | Set-Content $jsonPath -Encoding UTF8
 
 $enc = { param($t) [Net.WebUtility]::HtmlEncode([string]$t) }
-$skuHtml = ($skuRows | Sort-Object MonthlySpend -Descending | ForEach-Object {
-    $p = if ($null -ne $_.Price) { Format-Money $_.Price } else { 'n/a' }
-    "<tr><td>$(& $enc $_.Name)</td><td>$($_.Purchased)</td><td>$($_.Assigned)</td><td>$($_.Unassigned)</td><td>$p</td><td>$(Format-Money $_.MonthlySpend)</td><td class='bad'>$(Format-Money $_.UnassignedWaste)</td></tr>" }) -join "`n"
+$skuHtml = ($skuRows | Where-Object { $_.Type -ne 'Trial/Free' } | Sort-Object MonthlySpend -Descending | ForEach-Object {
+    $p = if ($null -eq $_.Price) { 'n/a' } elseif ($_.Price -ne [math]::Floor($_.Price)) { '{0}{1:N2}' -f $sym, $_.Price } else { Format-Money $_.Price }
+    $mark = if ($_.PriceSource -eq 'Contract') { ' <small>(contract)</small>' } else { '' }
+    "<tr><td>$(& $enc $_.Name)</td><td>$($_.Purchased)</td><td>$($_.Assigned)</td><td>$($_.Unassigned)</td><td>$p$mark</td><td>$(Format-Money $_.MonthlySpend)</td><td class='bad'>$(Format-Money $_.UnassignedWaste)</td></tr>" }) -join "`n"
+$trialNote = if ($trialRows.Count) { "<p><small>Not counted as spend: $($trialRows.Count) free or trial product(s) - $((@($trialRows | ForEach-Object { $_.Name }) | Select-Object -First 12) -join ', ')$(if ($trialRows.Count -gt 12) { ', ...' }). Their unassigned seats are not waste.</small></p>" } else { '' }
 $maxCat = [math]::Max(1, [double](@($byCat | Measure-Object Monthly -Maximum).Maximum))
 $catHtml = ($byCat | ForEach-Object {
     $w = [int](100 * $_.Monthly / $maxCat)
@@ -345,6 +374,7 @@ $warnHtml
 <table><tr><th>Category</th><th>Users</th><th>Saving / month</th><th></th></tr>$catHtml</table>
 <h2>Licences purchased</h2>
 <table><tr><th>Licence</th><th>Purchased</th><th>Assigned</th><th>Unassigned</th><th>Price / user / mo</th><th>Monthly spend</th><th>Unassigned cost / mo</th></tr>$skuHtml</table>
+$trialNote
 <h2>How to save more</h2><ol>$tipsHtml</ol>
 <h2>Action list (top 300 by saving; full list in the CSV)</h2>
 <table id='t'><tr><th>Category</th><th>User</th><th>Licences</th><th>Saving / mo</th><th>Confidence</th><th>Recommended action</th></tr>$rowsHtml</table>

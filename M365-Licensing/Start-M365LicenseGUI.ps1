@@ -21,8 +21,8 @@ function New-Box($x, $y, $w, $text = '') { $t = [Windows.Forms.TextBox]::new(); 
 function New-Button($text, $x, $y, $w = 90) { $b = [Windows.Forms.Button]::new(); $b.Text = $text; $b.Location = [Drawing.Point]::new($x, $y - 1); $b.Size = [Drawing.Size]::new($w, 26); $b }
 
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Microsoft 365 Licence Savings'; $form.Size = [Drawing.Size]::new(940, 760); $form.StartPosition = 'CenterScreen'
-$form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.Size]::new(940, 760)
+$form.Text = 'Microsoft 365 Licence Savings'; $form.Size = [Drawing.Size]::new(940, 790); $form.StartPosition = 'CenterScreen'
+$form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.Size]::new(940, 790)
 
 # ---- Inputs ----------------------------------------------------------------
 $form.Controls.Add((New-Label 'Tenant ID' 20 20))
@@ -52,33 +52,38 @@ $txtPrices = New-Box 140 148 520 (Join-Path $PSScriptRoot 'prices.csv'); $form.C
 $btnPrices = New-Button 'Browse' 670 148 80; $btnEditPrices = New-Button 'Open' 760 148 80
 $form.Controls.AddRange(@($btnPrices, $btnEditPrices))
 
-$form.Controls.Add((New-Label 'Output folder' 20 182))
-$txtOut = New-Box 140 182 520 (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'M365 Licence Review'); $form.Controls.Add($txtOut)
-$btnOut = New-Button 'Browse' 670 182 80; $btnOpenOut = New-Button 'Open' 760 182 80
+$form.Controls.Add((New-Label 'Contract prices' 20 182))
+$txtContract = New-Box 140 182 520 (Join-Path $PSScriptRoot 'customer-prices.csv'); $form.Controls.Add($txtContract)
+$btnContract = New-Button 'Browse' 670 182 80; $btnEditContract = New-Button 'Open' 760 182 80
+$form.Controls.AddRange(@($btnContract, $btnEditContract))
+$lblContractHint = New-Label 'Optional: your own prices per licence. Overrides the list prices.' 140 208 700; $lblContractHint.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblContractHint)
+$form.Controls.Add((New-Label 'Output folder' 20 236))
+$txtOut = New-Box 140 236 520 (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'M365 Licence Review'); $form.Controls.Add($txtOut)
+$btnOut = New-Button 'Browse' 670 236 80; $btnOpenOut = New-Button 'Open' 760 236 80
 $form.Controls.AddRange(@($btnOut, $btnOpenOut))
 
-$btnRun = New-Button 'Run analysis' 140 222 160; $btnRun.Height = 34; $btnRun.BackColor = [Drawing.Color]::FromArgb(10, 102, 194); $btnRun.ForeColor = [Drawing.Color]::White; $btnRun.FlatStyle = 'Flat'
-$lblStatus = New-Label 'Ready.' 320 230 560
+$btnRun = New-Button 'Run analysis' 140 276 160; $btnRun.Height = 34; $btnRun.BackColor = [Drawing.Color]::FromArgb(10, 102, 194); $btnRun.ForeColor = [Drawing.Color]::White; $btnRun.FlatStyle = 'Flat'
+$lblStatus = New-Label 'Ready.' 320 284 560
 $form.Controls.AddRange(@($btnRun, $lblStatus))
 
 # ---- Result cards ----------------------------------------------------------
 $cards = @{}
 $defs = @(@('spend', 'Monthly spend', 20), @('confirmed', 'Confirmed waste / month', 235), @('review', 'To review / month', 450), @('annual', 'Annual saving (confirmed)', 665))
 foreach ($d in $defs) {
-    $p = [Windows.Forms.Panel]::new(); $p.Location = [Drawing.Point]::new($d[2], 275); $p.Size = [Drawing.Size]::new(205, 78); $p.BorderStyle = 'FixedSingle'; $p.BackColor = [Drawing.Color]::FromArgb(243, 246, 250)
+    $p = [Windows.Forms.Panel]::new(); $p.Location = [Drawing.Point]::new($d[2], 329); $p.Size = [Drawing.Size]::new(205, 78); $p.BorderStyle = 'FixedSingle'; $p.BackColor = [Drawing.Color]::FromArgb(243, 246, 250)
     $cap = [Windows.Forms.Label]::new(); $cap.Text = $d[1]; $cap.Location = [Drawing.Point]::new(8, 6); $cap.Size = [Drawing.Size]::new(190, 20); $cap.ForeColor = [Drawing.Color]::Gray
     $val = [Windows.Forms.Label]::new(); $val.Text = '-'; $val.Font = [Drawing.Font]::new('Segoe UI', 15, [Drawing.FontStyle]::Bold); $val.Location = [Drawing.Point]::new(8, 30); $val.Size = [Drawing.Size]::new(190, 36)
     $p.Controls.AddRange(@($cap, $val)); $form.Controls.Add($p); $cards[$d[0]] = $val
 }
 $cards.confirmed.ForeColor = [Drawing.Color]::FromArgb(192, 57, 43); $cards.annual.ForeColor = [Drawing.Color]::FromArgb(30, 158, 90)
-$lblNote = New-Label '' 20 360 880; $lblNote.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblNote)
+$lblNote = New-Label '' 20 414 880; $lblNote.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblNote)
 
 # ---- Log and files ---------------------------------------------------------
 $txtLog = [Windows.Forms.TextBox]::new(); $txtLog.Multiline = $true; $txtLog.ReadOnly = $true; $txtLog.ScrollBars = 'Vertical'
-$txtLog.Location = [Drawing.Point]::new(20, 390); $txtLog.Size = [Drawing.Size]::new(880, 170); $txtLog.Font = [Drawing.Font]::new('Consolas', 9); $txtLog.Anchor = 'Top,Left,Right'
+$txtLog.Location = [Drawing.Point]::new(20, 444); $txtLog.Size = [Drawing.Size]::new(880, 140); $txtLog.Font = [Drawing.Font]::new('Consolas', 9); $txtLog.Anchor = 'Top,Left,Right'
 $form.Controls.Add($txtLog)
-$lblFiles = New-Label 'Generated files (double-click to open)' 20 570 400; $lblFiles.Font = [Drawing.Font]::new('Segoe UI', 9.5, [Drawing.FontStyle]::Bold); $form.Controls.Add($lblFiles)
-$lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Location = [Drawing.Point]::new(20, 596); $lstFiles.Size = [Drawing.Size]::new(880, 110); $lstFiles.Anchor = 'Top,Left,Right,Bottom'
+$lblFiles = New-Label 'Generated files (double-click to open)' 20 592 400; $lblFiles.Font = [Drawing.Font]::new('Segoe UI', 9.5, [Drawing.FontStyle]::Bold); $form.Controls.Add($lblFiles)
+$lstFiles = [Windows.Forms.ListBox]::new(); $lstFiles.Location = [Drawing.Point]::new(20, 618); $lstFiles.Size = [Drawing.Size]::new(880, 100); $lstFiles.Anchor = 'Top,Left,Right,Bottom'
 $form.Controls.Add($lstFiles)
 
 function Add-LogLine([string]$msg) { $txtLog.AppendText($msg + [Environment]::NewLine); [Windows.Forms.Application]::DoEvents() }
@@ -95,6 +100,8 @@ function Format-Amount([double]$v, [string]$cur) {
 # ---- Buttons ---------------------------------------------------------------
 $pickFile = { $d = [Windows.Forms.OpenFileDialog]::new(); $d.Filter = 'CSV files (*.csv)|*.csv'; if ($d.ShowDialog() -eq 'OK') { $txtPrices.Text = $d.FileName } }
 $btnPrices.Add_Click($pickFile)
+$btnContract.Add_Click({ $d = [Windows.Forms.OpenFileDialog]::new(); $d.Filter = 'CSV files (*.csv)|*.csv'; if ($d.ShowDialog() -eq 'OK') { $txtContract.Text = $d.FileName } })
+$btnEditContract.Add_Click({ if (Test-Path $txtContract.Text) { Invoke-Item $txtContract.Text } else { [Windows.Forms.MessageBox]::Show('Contract prices file not found.', 'Licence savings') | Out-Null } })
 $btnEditPrices.Add_Click({ if (Test-Path $txtPrices.Text) { Invoke-Item $txtPrices.Text } else { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'Licence savings') | Out-Null } })
 $btnOut.Add_Click({ $d = [Windows.Forms.FolderBrowserDialog]::new(); $d.SelectedPath = $txtOut.Text; if ($d.ShowDialog() -eq 'OK') { $txtOut.Text = $d.SelectedPath } })
 $btnOpenOut.Add_Click({ if (Test-Path $txtOut.Text) { Invoke-Item $txtOut.Text } else { [Windows.Forms.MessageBox]::Show('Output folder does not exist yet. Run an analysis first.', 'Licence savings') | Out-Null } })
@@ -119,6 +126,7 @@ $btnRun.Add_Click({
     if ($currencies.Count) { $params.Currencies = $currencies }
     if ($txtTenant.Text.Trim()) { $params.TenantId = $txtTenant.Text.Trim() }
     if ($txtName.Text.Trim()) { $params.CustomerName = $txtName.Text.Trim() }
+    if ($txtContract.Text.Trim() -and (Test-Path $txtContract.Text)) { $params.CustomerPricesCsv = $txtContract.Text }
     if ($chkSkip.Checked) { $params.SkipPartnerReport = $true }
 
     $txtLog.Clear(); $lstFiles.Items.Clear(); foreach ($k in $cards.Keys) { $cards[$k].Text = '-' }; $lblNote.Text = ''
