@@ -44,6 +44,9 @@ param(
     [switch]$DeviceCode,
     [switch]$Open
 )
+# Use the module bundled with the app when present (offline install); otherwise fall back to the user's installed copy
+$bundled = Join-Path $PSScriptRoot 'Modules'
+if (Test-Path $bundled) { $env:PSModulePath = "$bundled$([IO.Path]::PathSeparator)$env:PSModulePath" }
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 function Format-Money([double]$v) {

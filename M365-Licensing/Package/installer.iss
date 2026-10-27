@@ -3,13 +3,19 @@
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
+#ifndef Publisher
+  #define Publisher "Your Company Name"
+#endif
 #define AppName "Microsoft 365 Licence Review"
 
 [Setup]
 AppId={{6F1D2C58-9B4E-4C1A-8E73-5A2B7D9C41E6}
 AppName={#AppName}
 AppVersion={#AppVersion}
-AppPublisher=Your Company Name
+AppPublisher={#Publisher}
+VersionInfoVersion={#AppVersion}.0
+VersionInfoCompany={#Publisher}
+VersionInfoDescription={#AppName} setup
 DefaultDirName={localappdata}\M365LicenseReview
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -20,6 +26,11 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#AppName}
+#ifdef Sign
+; Store rule: the installer AND every PE file it installs (including the uninstaller) must be signed
+SignTool=store
+SignedUninstaller=yes
+#endif
 
 [Files]
 Source: "..\dist\M365LicenseReview\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
