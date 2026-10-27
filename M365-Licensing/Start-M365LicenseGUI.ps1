@@ -18,14 +18,14 @@ $bundled = Join-Path $PSScriptRoot 'Modules'
 if (Test-Path $bundled) { $env:PSModulePath = "$bundled$([IO.Path]::PathSeparator)$env:PSModulePath" }
 
 $scriptPath = Join-Path $PSScriptRoot 'Get-M365LicenseSavings.ps1'
-if (-not (Test-Path $scriptPath)) { [Windows.Forms.MessageBox]::Show("Cannot find $scriptPath", 'Licence savings') | Out-Null; return }
+if (-not (Test-Path $scriptPath)) { [Windows.Forms.MessageBox]::Show("Cannot find $scriptPath", 'M365TenantTidy') | Out-Null; return }
 
 function New-Label($text, $x, $y, $w = 110) { $l = [Windows.Forms.Label]::new(); $l.Text = $text; $l.Location = [Drawing.Point]::new($x, $y + 3); $l.Size = [Drawing.Size]::new($w, 20); $l }
 function New-Box($x, $y, $w, $text = '') { $t = [Windows.Forms.TextBox]::new(); $t.Location = [Drawing.Point]::new($x, $y); $t.Size = [Drawing.Size]::new($w, 24); $t.Text = $text; $t }
 function New-Button($text, $x, $y, $w = 90) { $b = [Windows.Forms.Button]::new(); $b.Text = $text; $b.Location = [Drawing.Point]::new($x, $y - 1); $b.Size = [Drawing.Size]::new($w, 26); $b }
 
 $form = [Windows.Forms.Form]::new()
-$form.Text = 'Microsoft 365 Licence Savings'; $form.Size = [Drawing.Size]::new(940, 800); $form.StartPosition = 'CenterScreen'
+$form.Text = 'M365TenantTidy'; $form.Size = [Drawing.Size]::new(940, 800); $form.StartPosition = 'CenterScreen'
 $form.Font = [Drawing.Font]::new('Segoe UI', 9.5); $form.MinimumSize = [Drawing.Size]::new(940, 800)
 
 # ---- Inputs ----------------------------------------------------------------
@@ -62,7 +62,7 @@ $btnContract = New-Button 'Browse' 670 182 80; $btnEditContract = New-Button 'Op
 $form.Controls.AddRange(@($btnContract, $btnEditContract))
 $lblContractHint = New-Label 'Optional: your own prices per licence. Overrides the list prices.' 140 208 700; $lblContractHint.ForeColor = [Drawing.Color]::Gray; $form.Controls.Add($lblContractHint)
 $form.Controls.Add((New-Label 'Output folder' 20 236))
-$txtOut = New-Box 140 236 520 (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'M365 Licence Review'); $form.Controls.Add($txtOut)
+$txtOut = New-Box 140 236 520 (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'M365TenantTidy'); $form.Controls.Add($txtOut)
 $btnOut = New-Button 'Browse' 670 236 80; $btnOpenOut = New-Button 'Open' 760 236 80
 $form.Controls.AddRange(@($btnOut, $btnOpenOut))
 
@@ -123,10 +123,10 @@ function Format-Amount([double]$v, [string]$cur) {
 $pickFile = { $d = [Windows.Forms.OpenFileDialog]::new(); $d.Filter = 'CSV files (*.csv)|*.csv'; if ($d.ShowDialog() -eq 'OK') { $txtPrices.Text = $d.FileName } }
 $btnPrices.Add_Click($pickFile)
 $btnContract.Add_Click({ $d = [Windows.Forms.OpenFileDialog]::new(); $d.Filter = 'CSV files (*.csv)|*.csv'; if ($d.ShowDialog() -eq 'OK') { $txtContract.Text = $d.FileName } })
-$btnEditContract.Add_Click({ if (Test-Path $txtContract.Text) { Invoke-Item $txtContract.Text } else { [Windows.Forms.MessageBox]::Show('Contract prices file not found.', 'Licence savings') | Out-Null } })
-$btnEditPrices.Add_Click({ if (Test-Path $txtPrices.Text) { Invoke-Item $txtPrices.Text } else { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'Licence savings') | Out-Null } })
+$btnEditContract.Add_Click({ if (Test-Path $txtContract.Text) { Invoke-Item $txtContract.Text } else { [Windows.Forms.MessageBox]::Show('Contract prices file not found.', 'M365TenantTidy') | Out-Null } })
+$btnEditPrices.Add_Click({ if (Test-Path $txtPrices.Text) { Invoke-Item $txtPrices.Text } else { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'M365TenantTidy') | Out-Null } })
 $btnOut.Add_Click({ $d = [Windows.Forms.FolderBrowserDialog]::new(); $d.SelectedPath = $txtOut.Text; if ($d.ShowDialog() -eq 'OK') { $txtOut.Text = $d.SelectedPath } })
-$btnOpenOut.Add_Click({ if (Test-Path $txtOut.Text) { Invoke-Item $txtOut.Text } else { [Windows.Forms.MessageBox]::Show('Output folder does not exist yet. Run an analysis first.', 'Licence savings') | Out-Null } })
+$btnOpenOut.Add_Click({ if (Test-Path $txtOut.Text) { Invoke-Item $txtOut.Text } else { [Windows.Forms.MessageBox]::Show('Output folder does not exist yet. Run an analysis first.', 'M365TenantTidy') | Out-Null } })
 function Show-Results([string]$cur) {
     $jf = $script:jsonByCur[$cur]; if (-not $jf) { return }
     $r = Get-Content $jf -Raw | ConvertFrom-Json
@@ -194,18 +194,18 @@ $lstFiles.Add_DoubleClick({ if ($lstFiles.SelectedItem) { $f = Join-Path $txtOut
 
 $btnRun.Add_Click({
     if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-        $ans = [Windows.Forms.MessageBox]::Show("The Microsoft Graph PowerShell module is needed (one-time, installs for your user only). Install it now?", 'Licence savings', 'YesNo', 'Question')
+        $ans = [Windows.Forms.MessageBox]::Show("The Microsoft Graph PowerShell module is needed (one-time, installs for your user only). Install it now?", 'M365TenantTidy', 'YesNo', 'Question')
         if ($ans -ne 'Yes') { return }
         $lblStatus.Text = 'Installing Microsoft Graph module. This can take a few minutes.'; Set-Busy $true
         try {
             Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Scope CurrentUser -Force | Out-Null
             Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
-        } catch { Set-Busy $false; [Windows.Forms.MessageBox]::Show("Install failed: $($_.Exception.Message)", 'Licence savings') | Out-Null; $lblStatus.Text = 'Module install failed.'; return }
+        } catch { Set-Busy $false; [Windows.Forms.MessageBox]::Show("Install failed: $($_.Exception.Message)", 'M365TenantTidy') | Out-Null; $lblStatus.Text = 'Module install failed.'; return }
         Set-Busy $false
     }
     $sel = [string]$cmbCur.SelectedItem
     $currencies = if ($sel -like 'Auto*') { @() } elseif ($sel -eq 'All') { $curCodes } else { @($sel) }
-    if (-not (Test-Path $txtPrices.Text)) { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'Licence savings') | Out-Null; return }
+    if (-not (Test-Path $txtPrices.Text)) { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'M365TenantTidy') | Out-Null; return }
 
     $params = @{ InactiveDays = [int]$numDays.Value; PricesCsv = $txtPrices.Text; OutputDir = $txtOut.Text; Verbose = $true }
     if ($currencies.Count) { $params.Currencies = $currencies }

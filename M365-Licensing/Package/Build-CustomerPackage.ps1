@@ -15,7 +15,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $src = Split-Path $PSScriptRoot -Parent
-$stage = Join-Path $OutDir 'M365LicenseReview'
+$stage = Join-Path $OutDir 'M365TenantTidy'
 if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
@@ -46,7 +46,7 @@ Set-Content -Path (Join-Path $stage 'version.txt') -Value $Version -Encoding ASC
 $banned = Get-ChildItem $stage -Recurse -File | Where-Object { $_.FullName -notmatch '[\\/]Modules[\\/]' } | Where-Object { $_.Name -match 'partner|\.json$|output' }
 if ($banned) { throw "Internal file(s) in package: $($banned.Name -join ', ')" }
 
-$zip = Join-Path $OutDir "M365LicenseReview-$Version.zip"
+$zip = Join-Path $OutDir "M365TenantTidy-$Version.zip"
 Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip
 Write-Output "Staged: $stage"
 Write-Output "ZIP:    $zip"

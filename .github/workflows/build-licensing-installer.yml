@@ -50,7 +50,7 @@ jobs:
             $signDir = Split-Path ((Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName)
             $env:PATH = "$signDir;$env:PATH"
             # Some bundled third-party DLLs carry no Authenticode signature: sign those with our certificate first
-            $unsigned = Get-ChildItem dist/M365LicenseReview -Recurse -File -Include *.exe, *.dll | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+            $unsigned = Get-ChildItem dist/M365TenantTidy -Recurse -File -Include *.exe, *.dll | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
             foreach ($f in $unsigned) {
               signtool.exe sign /sha1 $cert.Thumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f.FullName | Out-Null
               if ($LASTEXITCODE -ne 0) { throw "Signing failed for $($f.Name)" }
@@ -74,7 +74,7 @@ jobs:
           SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
       - uses: actions/upload-artifact@v4
         with:
-          name: M365LicenseReview-${{ steps.v.outputs.version }}
+          name: M365TenantTidy-${{ steps.v.outputs.version }}
           path: |
             M365-Licensing/Package/dist/*.exe
             M365-Licensing/Package/dist/*.zip
@@ -83,4 +83,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName --title "Licence Review ${{ steps.v.outputs.version }}" --notes "Customer edition installer and ZIP. Silent install (Microsoft Store): M365LicenseReview-Setup-${{ steps.v.outputs.version }}.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+        run: gh release create "${{ github.ref_name }}" (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName --title "M365TenantTidy ${{ steps.v.outputs.version }}" --notes "Customer edition installer and ZIP. Silent install (Microsoft Store): M365TenantTidy-Setup-${{ steps.v.outputs.version }}.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"

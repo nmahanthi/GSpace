@@ -1,12 +1,12 @@
 ; Inno Setup script for the customer edition. Build with: ISCC /DAppVersion=1.0.0 installer.iss
-; Run Build-CustomerPackage.ps1 first so ..\dist\M365LicenseReview exists.
+; Run Build-CustomerPackage.ps1 first so ..\dist\M365TenantTidy exists.
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
 #ifndef Publisher
   #define Publisher "Your Company Name"
 #endif
-#define AppName "Microsoft 365 Licence Review"
+#define AppName "M365TenantTidy"
 
 [Setup]
 AppId={{6F1D2C58-9B4E-4C1A-8E73-5A2B7D9C41E6}
@@ -16,12 +16,12 @@ AppPublisher={#Publisher}
 VersionInfoVersion={#AppVersion}.0
 VersionInfoCompany={#Publisher}
 VersionInfoDescription={#AppName} setup
-DefaultDirName={localappdata}\M365LicenseReview
+DefaultDirName={localappdata}\M365TenantTidy
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=M365LicenseReview-Setup-{#AppVersion}
+OutputBaseFilename=M365TenantTidy-Setup-{#AppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -33,7 +33,7 @@ SignedUninstaller=yes
 #endif
 
 [Files]
-Source: "..\dist\M365LicenseReview\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+Source: "..\dist\M365TenantTidy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
