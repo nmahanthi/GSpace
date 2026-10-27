@@ -16,6 +16,8 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 # Use the module bundled with the app when present (offline install); otherwise fall back to the user's installed copy
 $bundled = Join-Path $PSScriptRoot 'Modules'
 if (Test-Path $bundled) { $env:PSModulePath = "$bundled$([IO.Path]::PathSeparator)$env:PSModulePath" }
+# Files from a downloaded ZIP are marked as blocked by Windows; unblock them so the module and scripts load
+if (Test-Path $bundled) { Get-ChildItem $PSScriptRoot -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { try { Unblock-File -LiteralPath $_.FullName -ErrorAction Stop } catch { } } }
 
 $scriptPath = Join-Path $PSScriptRoot 'Get-M365LicenseSavings.ps1'
 if (-not (Test-Path $scriptPath)) { [Windows.Forms.MessageBox]::Show("Cannot find $scriptPath", 'M365TenantTidy') | Out-Null; return }

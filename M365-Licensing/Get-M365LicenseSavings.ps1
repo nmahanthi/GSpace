@@ -47,6 +47,15 @@ param(
 # Use the module bundled with the app when present (offline install); otherwise fall back to the user's installed copy
 $bundled = Join-Path $PSScriptRoot 'Modules'
 if (Test-Path $bundled) { $env:PSModulePath = "$bundled$([IO.Path]::PathSeparator)$env:PSModulePath" }
+$graphImportError = $null
+if (Test-Path $bundled) {
+    Get-ChildItem $bundled -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object { try { Unblock-File -LiteralPath $_.FullName -ErrorAction Stop } catch { } }
+    $bundledPsd1 = Get-ChildItem $bundled -Recurse -Filter 'Microsoft.Graph.Authentication.psd1' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($bundledPsd1) { try { Import-Module $bundledPsd1.FullName -ErrorAction Stop } catch { $graphImportError = $_.Exception.Message } }
+}
+if (-not (Get-Command Connect-MgGraph -ErrorAction SilentlyContinue)) {
+    throw ("The Microsoft Graph module could not be loaded. " + $(if ($graphImportError) { "Reason: $graphImportError " } else { "It was not found next to the app or installed on this PC. " }) + "Fix: close the app, right-click the ZIP > Properties > tick Unblock > OK, extract it again; or run in PowerShell: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser")
+}
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 function Format-Money([double]$v) {
