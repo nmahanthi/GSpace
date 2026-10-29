@@ -77,7 +77,6 @@ jobs:
           name: M365TenantTidy-${{ steps.v.outputs.version }}
           path: |
             M365-Licensing/Package/dist/*.exe
-            M365-Licensing/Package/dist/*.zip
       - name: Attach to GitHub release (tag builds only)
         if: github.event_name == 'push'
         shell: pwsh
@@ -86,5 +85,5 @@ jobs:
         run: |
           $v = '${{ steps.v.outputs.version }}'
           $notes = "Silent install: M365TenantTidy-Setup-$v.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
-          $files = (Get-ChildItem M365-Licensing/Package/dist/*.exe, M365-Licensing/Package/dist/*.zip).FullName
+          $files = (Get-ChildItem M365-Licensing/Package/dist/*.exe).FullName
           gh release create "${{ github.ref_name }}" $files --title "M365TenantTidy $v" --notes $notes
