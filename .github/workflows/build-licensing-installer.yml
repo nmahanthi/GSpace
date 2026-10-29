@@ -84,6 +84,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = '${{ steps.v.outputs.version }}'
-          $notes = "Silent install: M365TenantTidy-Setup-$v.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+          $notes = "**Download: M365TenantTidy-Setup-$v.exe** (the file listed under Assets below; ignore the Source code links).`n`nSilent install: M365TenantTidy-Setup-$v.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
           $files = (Get-ChildItem M365-Licensing/Package/dist/*.exe).FullName
           gh release create "${{ github.ref_name }}" $files --title "M365TenantTidy $v" --notes $notes
