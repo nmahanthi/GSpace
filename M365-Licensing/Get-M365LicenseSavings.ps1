@@ -292,7 +292,7 @@ foreach ($r in $skuRows) {
 # 2. SKUs with no price or zero price are excluded from money figures
 $noPrice = @($skuRows | Where-Object { $null -eq $_.Price } | ForEach-Object { $_.Sku })
 if ($noPrice.Count) {
-    $warnings += "CHECK: $($noPrice.Count) paid licence(s) have no price and are NOT in any money figure: $($noPrice -join ', '). Add them to customer-prices.csv (a ready-to-fill file is in the output folder)."
+    $warnings += "CHECK: $($noPrice.Count) paid licence(s) have no price and are NOT in any money figure: $($noPrice -join ', '). Add their prices to prices.csv (a ready-to-fill file is in the output folder)."
     $tplPath = Join-Path $OutputDir "$safe-prices-to-fill-$Currency.csv"
     $skuRows | Where-Object { $null -eq $_.Price } | ForEach-Object {
         $o = [ordered]@{ SkuPartNumber = $_.Sku; FriendlyName = $_.Name }; $o["Price$Currency"] = ''; $o.Purchased = $_.Purchased; [pscustomobject]$o
@@ -325,7 +325,14 @@ $evUsers = foreach ($u in $licensedUsers) {
     }
 }
 $evUsers | Export-Csv (Join-Path $OutputDir "$safe-evidence-users-$Currency.csv") -NoTypeInformation -Encoding UTF8
-$skuRows | Export-Csv (Join-Path $OutputDir "$safe-evidence-skus-$Currency.csv") -NoTypeInformation -Encoding UTF8
+# Seat reconciliation from usage and allocation (no prices needed): bought vs allocated vs actually active
+$skuEvidence = foreach ($r in $skuRows) {
+    $sid = ($skus | Where-Object skuPartNumber -eq $r.Sku | Select-Object -First 1).skuId
+    $holders = @($licensedUsers | Where-Object { @($_.assignedLicenses.skuId) -contains $sid })
+    $active = @($holders | Where-Object { $d = Get-LastSignIn $_; $d -and $d -ge $cutoff }).Count
+    $r | Select-Object *, @{n='HoldersCounted';e={$holders.Count}}, @{n='ActiveHolders';e={$active}}, @{n='InactiveOrNeverSignedIn';e={$holders.Count - $active}}
+}
+$skuEvidence | Export-Csv (Join-Path $OutputDir "$safe-evidence-skus-$Currency.csv") -NoTypeInformation -Encoding UTF8
 
 # ---- Totals ----------------------------------------------------------------
 $monthlySpend = ($skuRows | Measure-Object MonthlySpend -Sum).Sum
