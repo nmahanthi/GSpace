@@ -41,7 +41,7 @@ $form.Controls.Add((New-Label 'Optional. Blank = name from the tenant.' 510 54 3
 
 $form.Controls.Add((New-Label 'Currency' 20 88))
 $cmbCur = [Windows.Forms.ComboBox]::new(); $cmbCur.DropDownStyle = 'DropDownList'; $cmbCur.Location = [Drawing.Point]::new(140, 86); $cmbCur.Size = [Drawing.Size]::new(150, 24)
-$curCodes = @(); try { $curCodes = @((Import-Csv (Join-Path $PSScriptRoot 'prices.csv') | Select-Object -First 1).PSObject.Properties.Name | Where-Object { $_ -like 'Price*' -and $_.Length -eq 8 } | ForEach-Object { $_.Substring(5) }) } catch { $curCodes = @('USD') }
+$curCodes = @(); try { $curCodes = @((Import-Csv (Join-Path $PSScriptRoot $(if (Test-Path (Join-Path $PSScriptRoot 'prices.csv')) { 'prices.csv' } else { 'prices.sample.csv' })) | Select-Object -First 1).PSObject.Properties.Name | Where-Object { $_ -like 'Price*' -and $_.Length -eq 8 } | ForEach-Object { $_.Substring(5) }) } catch { $curCodes = @('USD') }
 [void]$cmbCur.Items.Add('Auto (from tenant)'); foreach ($c in $curCodes) { [void]$cmbCur.Items.Add($c) }; if ($curCodes.Count -gt 1) { [void]$cmbCur.Items.Add('All') }
 $cmbCur.SelectedIndex = 0; $form.Controls.Add($cmbCur)
 
@@ -54,7 +54,7 @@ $form.Controls.Add($chkSkip)
 if (-not (Test-Path (Join-Path $PSScriptRoot 'partner-terms.csv'))) { $chkSkip.Visible = $false }   # customer edition: no partner view
 
 $form.Controls.Add((New-Label 'Prices file' 20 148))
-$txtPrices = New-Box 140 148 520 (Join-Path $PSScriptRoot 'prices.csv'); $form.Controls.Add($txtPrices)
+$txtPrices = New-Box 140 148 520 $(if (Test-Path (Join-Path $PSScriptRoot 'prices.csv')) { Join-Path $PSScriptRoot 'prices.csv' } else { '' }); $form.Controls.Add($txtPrices)
 $btnPrices = New-Button 'Browse' 670 148 80; $btnEditPrices = New-Button 'Open' 760 148 80
 $form.Controls.AddRange(@($btnPrices, $btnEditPrices))
 
@@ -207,7 +207,7 @@ $btnRun.Add_Click({
     }
     $sel = [string]$cmbCur.SelectedItem
     $currencies = if ($sel -like 'Auto*') { @() } elseif ($sel -eq 'All') { $curCodes } else { @($sel) }
-    if (-not (Test-Path $txtPrices.Text)) { [Windows.Forms.MessageBox]::Show('Prices file not found.', 'M365TenantTidy') | Out-Null; return }
+    if (-not (Test-Path $txtPrices.Text)) { [Windows.Forms.MessageBox]::Show('Choose the customer''s prices file first (per user per month, from their invoice). prices.sample.csv shows the format.', 'M365TenantTidy') | Out-Null; return }
 
     $params = @{ InactiveDays = [int]$numDays.Value; PricesCsv = $txtPrices.Text; OutputDir = $txtOut.Text; Verbose = $true }
     if ($currencies.Count) { $params.Currencies = $currencies }

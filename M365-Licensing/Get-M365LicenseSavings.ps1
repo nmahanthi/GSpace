@@ -13,7 +13,7 @@
     Requires: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser
     Graph permissions (read-only): User.Read.All, Organization.Read.All, AuditLog.Read.All, Reports.Read.All, ReportSettings.Read.All
       (application permissions for unattended use; delegated scopes are requested when signing in interactively).
-    Microsoft has no price API. Prices come from prices.csv (SkuPartNumber,FriendlyName,PriceUSD,PriceINR,...; per user per month).
+    Microsoft has no price API. Prices come from the customer's own prices.csv (see prices.sample.csv for the format; SkuPartNumber,FriendlyName,PriceUSD,PriceINR,...; per user per month).
     To support another currency add a Price<CODE> column (e.g. PriceGBP). The currency is picked from the tenant's country
     unless -Currencies is given; a country whose currency has no price column falls back to USD with a warning.
     The shipped prices are PLACEHOLDERS: replace them with the customer's real contract prices.
@@ -53,6 +53,10 @@ if (Test-Path $bundled) {
     $bundledPsd1 = Get-ChildItem $bundled -Recurse -Filter 'Microsoft.Graph.Authentication.psd1' -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($bundledPsd1) { try { Import-Module $bundledPsd1.FullName -ErrorAction Stop } catch { $graphImportError = $_.Exception.Message } }
 }
+if (-not (Test-Path $PricesCsv)) {
+    throw "Prices file not found: $PricesCsv. Each customer supplies their own prices.csv (per user per month, from their invoice). Copy prices.sample.csv, fill in the customer's prices and pass it with -PricesCsv."
+}
+
 if (-not (Get-Command Connect-MgGraph -ErrorAction SilentlyContinue)) {
     throw ("The Microsoft Graph module could not be loaded. " + $(if ($graphImportError) { "Reason: $graphImportError " } else { "It was not found next to the app or installed on this PC. " }) + "Fix: close the app, right-click the ZIP > Properties > tick Unblock > OK, extract it again; or run in PowerShell: Install-Module Microsoft.Graph.Authentication -Scope CurrentUser")
 }
@@ -175,6 +179,7 @@ $warnings = @($baseWarnings)
 if ($regionNote -and $regionNote -like 'Tenant country*') { $warnings += $regionNote }
 $price = @{}; $friendly = @{}
 foreach ($p in Import-Csv $PricesCsv) {
+    if ("$($p."Price$Currency")".Trim() -eq '') { $friendly[$p.SkuPartNumber] = $p.FriendlyName; continue }   # blank = price unknown, not free
     $price[$p.SkuPartNumber] = [double]$p."Price$Currency"
     $friendly[$p.SkuPartNumber] = $p.FriendlyName
 }
