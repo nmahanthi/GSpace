@@ -1,0 +1,89 @@
+name: Build licence review installer
+on:
+  push:
+    tags: ['licence-v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number, e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Work out version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'push') { '${{ github.ref_name }}' -replace '^licence-v','' } else { '${{ inputs.version }}' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+      - name: Stage customer package
+        shell: pwsh
+        working-directory: M365-Licensing/Package
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          ./Build-CustomerPackage.ps1 -Version ${{ steps.v.outputs.version }} -BundleGraphModule
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Build installer (signed when a certificate secret is set)
+        shell: pwsh
+        working-directory: M365-Licensing/Package
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+          PUBLISHER_NAME: ${{ vars.PUBLISHER_NAME }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $isccArgs = @("/DAppVersion=${{ steps.v.outputs.version }}")
+          if ($env:PUBLISHER_NAME) { $isccArgs += "/DPublisher=$env:PUBLISHER_NAME" }
+          if ($env:SIGN_PFX_BASE64) {
+            # Import the certificate into the user store so the password never appears on a command line
+            $pfx = Join-Path $env:RUNNER_TEMP 'sign.pfx'
+            [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_BASE64))
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString $env:SIGN_PFX_PASSWORD -AsPlainText -Force)
+            Remove-Item $pfx -Force
+            $signDir = Split-Path ((Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1).FullName)
+            $env:PATH = "$signDir;$env:PATH"
+            # Some bundled third-party DLLs carry no Authenticode signature: sign those with our certificate first
+            $unsigned = Get-ChildItem dist/M365TenantTidy -Recurse -File -Include *.exe, *.dll | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' }
+            foreach ($f in $unsigned) {
+              signtool.exe sign /sha1 $cert.Thumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $f.FullName | Out-Null
+              if ($LASTEXITCODE -ne 0) { throw "Signing failed for $($f.Name)" }
+            }
+            "Signed $(@($unsigned).Count) previously unsigned file(s)"
+            $isccArgs += '/DSign=1'
+            $isccArgs += "/Sstore=signtool.exe sign /sha1 $($cert.Thumbprint) /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 `$f"
+          } else { Write-Warning 'No SIGN_PFX_BASE64 secret: the installer will be UNSIGNED and cannot be submitted to the Microsoft Store.' }
+          & $iscc @isccArgs installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+      - name: Check signatures (Store rule - every EXE/DLL must be signed by a trusted CA)
+        shell: pwsh
+        working-directory: M365-Licensing/Package
+        run: |
+          $pe = Get-ChildItem dist -Recurse -File -Include *.exe, *.dll
+          $bad = @($pe | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'Valid' })
+          "{0} executable file(s) checked, {1} without a valid signature" -f $pe.Count, $bad.Count
+          $bad | ForEach-Object { "UNSIGNED: " + $_.FullName.Substring($_.FullName.IndexOf('dist')) }
+          if ($bad.Count -and $env:SIGN_PFX_BASE64) { throw 'Unsigned or invalid files found; the Store will reject this build.' }
+        env:
+          SIGN_PFX_BASE64: ${{ secrets.SIGN_PFX_BASE64 }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M365TenantTidy-${{ steps.v.outputs.version }}
+          path: |
+            M365-Licensing/Package/dist/*.exe
+      - name: Attach to GitHub release (tag builds only)
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.v.outputs.version }}'
+          $notes = "**Download: M365TenantTidy-Setup-$v.exe** (the file listed under Assets below; ignore the Source code links).`n`nSilent install: M365TenantTidy-Setup-$v.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+          $files = (Get-ChildItem M365-Licensing/Package/dist/*.exe).FullName
+          gh release create "${{ github.ref_name }}" $files --title "M365TenantTidy $v" --notes $notes
